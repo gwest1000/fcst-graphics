@@ -85,6 +85,11 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--state-path", type=Path, default=STATE_PATH)
     parser.add_argument("--latest-path", type=Path, default=LATEST_PATH)
     parser.add_argument("--no-notify", action="store_true")
+    parser.add_argument(
+        "--always-notify",
+        action="store_true",
+        help="Send a heartbeat notification even when usage is below warning thresholds.",
+    )
     return parser.parse_args(list(argv))
 
 
@@ -359,14 +364,17 @@ def main(argv: Iterable[str]) -> int:
         }
         write_json(args.latest_path, payload)
         fractions = assessment["fractions"]
+        summary_prefix = "R2 weekly report" if args.always_notify else f"R2 {assessment['level']}"
         summary = (
-            f"R2 {assessment['level']}: storage {storage_gb:.2f}/10 GB; "
+            f"{summary_prefix}: storage {storage_gb:.2f}/10 GB; "
             f"projected Class A {fractions['class_a_projected']:.1%}; "
             f"projected Class B {fractions['class_b_projected']:.1%}."
         )
         print(summary, flush=True)
         notified = False
-        if not args.no_notify and should_notify(str(assessment["level"]), state, now):
+        if not args.no_notify and (
+            args.always_notify or should_notify(str(assessment["level"]), state, now)
+        ):
             notified = notify(summary)
         new_state = {
             "level": assessment["level"],
@@ -382,7 +390,11 @@ def main(argv: Iterable[str]) -> int:
         failures = int(state.get("consecutive_failures", 0)) + 1
         message = f"R2 usage check failed ({failures} consecutive): {exc}"
         print(message, flush=True)
-        notified = failures == 3 and not args.no_notify and notify(message)
+        notified = (
+            (args.always_notify or failures == 3)
+            and not args.no_notify
+            and notify(message)
+        )
         write_json(
             args.state_path,
             {

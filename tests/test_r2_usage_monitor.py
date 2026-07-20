@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import datetime as dt
 import unittest
+from unittest.mock import patch
 
 from monitor_r2_usage import (
     assess_usage,
     billing_period,
     classify_operations,
     latest_storage,
+    main,
 )
 
 
@@ -86,6 +88,31 @@ class R2UsageMonitorTests(unittest.TestCase):
         self.assertEqual(result["object_count"], 20)
         self.assertEqual(result["pending_uploads"], 1)
         self.assertEqual(set(result["buckets"]), {"fcst-graphics", "other"})
+
+    @patch("monitor_r2_usage.write_json")
+    @patch("monitor_r2_usage.notify", return_value=True)
+    @patch(
+        "monitor_r2_usage.graphql_usage",
+        return_value={"operations": [], "storage": []},
+    )
+    def test_weekly_report_notifies_when_usage_is_ok(
+        self,
+        _usage,
+        notify_mock,
+        _write_json,
+    ):
+        with patch.dict(
+            "os.environ",
+            {
+                "FCST_R2_ACCOUNT_ID": "account",
+                "FCST_R2_BUCKET": "bucket",
+                "FCST_CLOUDFLARE_API_TOKEN": "token",
+            },
+            clear=False,
+        ):
+            self.assertEqual(main(["--always-notify"]), 0)
+        notify_mock.assert_called_once()
+        self.assertIn("R2 weekly report", notify_mock.call_args.args[0])
 
 
 if __name__ == "__main__":

@@ -60,8 +60,10 @@ scripts/launchd/install_r2_usage_monitor.sh
 ```
 
 The default checks run at 02:00, 10:00, 14:00, and 22:00 local time. Current
-results are written to `logs/r2_usage_latest.json`. R2 credentials and the
-Cloudflare analytics token are kept in macOS Keychain.
+results are written to `logs/r2_usage_latest.json`. A separate weekly heartbeat
+runs every Monday at 10:05 local time and always sends a usage notification,
+including when usage is healthy. R2 credentials and the Cloudflare analytics
+token are kept in macOS Keychain.
 The publisher token is intentionally limited to bucket object read/write. Bucket
 CORS and lifecycle configuration therefore requires a separate administrative
 credential if `configure_r2_bucket.py` must be rerun.
