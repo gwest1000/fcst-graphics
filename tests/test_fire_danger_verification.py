@@ -56,6 +56,30 @@ class FireDangerVerificationTest(unittest.TestCase):
             automation.save_state(state_path, after)
             self.assertEqual(automation.load_state(state_path), after)
 
+    def test_latest_local_run_stamp_ignores_unrelated_directories(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            first = root / "fwi"
+            second = root / "fire_weather"
+            for path in (
+                first / "20260719T12Z",
+                second / "20260720T06Z",
+                second / "scratch",
+            ):
+                path.mkdir(parents=True)
+            product = automation.PRODUCTS[automation.DEFAULT_FORECAST_PRODUCT]
+            required = automation.minimum_manifest_hours(automation.DEFAULT_FORECAST_PRODUCT)
+            for hour in range(required):
+                path = second / "20260720T06Z" / (
+                    f"{product.prefix}_20260720T06Z_f{hour:03d}.png"
+                )
+                path.touch()
+
+            self.assertEqual(
+                automation.latest_local_run_stamp((first, second)),
+                "20260720T06Z",
+            )
+
     def test_station_mapping_is_rebuilt_when_grid_shape_changes(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

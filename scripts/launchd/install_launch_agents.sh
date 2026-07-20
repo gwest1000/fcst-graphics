@@ -181,6 +181,7 @@ install_interval_agent() {
   <array>
     <string>${PYTHON_BIN}</string>
     <string>${automation}</string>
+    <string>--no-publish</string>
   </array>
   <key>StartInterval</key>
   <integer>${interval_seconds}</integer>
