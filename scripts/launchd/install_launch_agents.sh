@@ -11,7 +11,6 @@ AUTOMATION="${REPO_ROOT}/automate_hrdps_west.py"
 ENSEMBLE_RUNNER="${REPO_ROOT}/scripts/launchd/run_ensemble_control_fourpanel.sh"
 LPI_VERIFICATION_AUTOMATION="${REPO_ROOT}/automate_lpi_verification.py"
 FIRE_DANGER_VERIFICATION_AUTOMATION="${REPO_ROOT}/automate_fire_danger_verification.py"
-R2_PUBLISHER="${REPO_ROOT}/scripts/launchd/run_r2_publisher.sh"
 
 mkdir -p "${AGENT_DIR}" "${LOG_DIR}"
 
@@ -208,47 +207,6 @@ PLIST
 install_interval_agent "com.greg.lpi-verification" "600" "${LPI_VERIFICATION_AUTOMATION}" "lpi_verification"
 install_interval_agent "com.greg.fire-danger-verification" "1800" "${FIRE_DANGER_VERIFICATION_AUTOMATION}" "fire_danger_verification"
 
-install_r2_agent() {
-  local model="$1"
-  local target="${AGENT_DIR}/com.greg.fcst-r2-${model}.plist"
-  cat > "${target}" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.greg.fcst-r2-${model}</string>
-  <key>WorkingDirectory</key>
-  <string>${REPO_ROOT}</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/zsh</string>
-    <string>${R2_PUBLISHER}</string>
-    <string>--model</string>
-    <string>${model}</string>
-    <string>--once</string>
-    <string>--sync-retained</string>
-  </array>
-  <key>StartInterval</key>
-  <integer>180</integer>
-  <key>RunAtLoad</key>
-  <true/>
-  <key>StandardOutPath</key>
-  <string>${LOG_DIR}/r2_${model}.log</string>
-  <key>StandardErrorPath</key>
-  <string>${LOG_DIR}/r2_${model}.err.log</string>
-</dict>
-</plist>
-PLIST
-  plutil -lint "${target}" >/dev/null
-  launchctl bootout "gui/${UID}/com.greg.fcst-r2-${model}" 2>/dev/null || true
-  launchctl bootstrap "gui/${UID}" "${target}"
-  launchctl enable "gui/${UID}/com.greg.fcst-r2-${model}"
-}
-
-install_r2_agent "continental"
-install_r2_agent "west"
-install_r2_agent "gefs_control"
-install_r2_agent "ecmwf_control"
+"${SCRIPT_DIR}/install_r2_launch_agents.sh"
 
 launchctl print "gui/${UID}" | grep 'com.greg' || true
