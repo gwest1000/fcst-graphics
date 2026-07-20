@@ -1227,7 +1227,15 @@
               if (!response.ok) {
                 throw new Error(`${url}: HTTP ${response.status}`);
               }
-              return response.json();
+              const data = await response.json();
+              for (const run of data.runs || []) {
+                for (const product of Object.values(run.products || {})) {
+                  if (product.imageBase) {
+                    product.imageBase = new URL(product.imageBase, response.url).href;
+                  }
+                }
+              }
+              return data;
             }),
           );
           const runMap = new Map();

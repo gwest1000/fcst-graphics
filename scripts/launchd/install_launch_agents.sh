@@ -56,6 +56,7 @@ install_agent() {
     <string>5</string>
     <string>--max-runtime-minutes</string>
     <string>${max_runtime_minutes}</string>
+    <string>--no-legacy-pages-publish</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>
@@ -124,6 +125,7 @@ install_ensemble_agent() {
     <string>${cycle}</string>
     <string>--max-runtime-minutes</string>
     <string>360</string>
+    <string>--no-legacy-pages-publish</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>

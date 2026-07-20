@@ -13,6 +13,7 @@ import sqlite3
 import subprocess
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,7 @@ IMAGE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 MANIFEST_CACHE_CONTROL = "no-cache, max-age=0, must-revalidate"
 PUBLISH_FORMAT_VERSION = "pngquant-70-90-speed1-v1"
 STATE_ROOT = Path("logs/state")
+PNG_END_MARKER = b"\x00\x00\x00\x00IEND\xaeB\x60\x82"
 
 MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
     "continental": (
@@ -106,7 +108,7 @@ class LocalFrame:
 
 
 class PublishState:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, storage_scope: str = ""):
         path.parent.mkdir(parents=True, exist_ok=True)
         self.connection = sqlite3.connect(path, timeout=30)
         self.connection.row_factory = sqlite3.Row
@@ -137,6 +139,19 @@ class PublishState:
             )
         self.connection.execute(
             "CREATE INDEX IF NOT EXISTS artifacts_model_stamp ON artifacts(model, stamp)"
+        )
+        self.connection.execute(
+            "CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        )
+        previous_scope = self.connection.execute(
+            "SELECT value FROM metadata WHERE key = 'storage_scope'"
+        ).fetchone()
+        if previous_scope is not None and str(previous_scope[0]) != storage_scope:
+            self.connection.execute("DELETE FROM artifacts")
+        self.connection.execute(
+            "INSERT INTO metadata(key, value) VALUES('storage_scope', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (storage_scope,),
         )
         self.connection.commit()
 
@@ -289,6 +304,17 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def is_complete_png(path: Path) -> bool:
+    try:
+        if path.stat().st_size < len(PNG_END_MARKER):
+            return False
+        with path.open("rb") as handle:
+            handle.seek(-len(PNG_END_MARKER), os.SEEK_END)
+            return handle.read() == PNG_END_MARKER
+    except OSError:
+        return False
+
+
 @contextmanager
 def optimized_png(source: Path):
     pngquant = shutil.which("pngquant")
@@ -359,6 +385,13 @@ def upload_frame(client, config: R2Config, frame: LocalFrame, body_path: Path, s
             )
 
     retry(put, f"Upload {frame.object_key}")
+
+
+def optimize_and_upload(client, config: R2Config, frame: LocalFrame) -> tuple[LocalFrame, str]:
+    with optimized_png(frame.path) as upload_path:
+        sha256 = sha256_file(upload_path)
+        upload_frame(client, config, frame, upload_path, sha256)
+    return frame, sha256
 
 
 def asset_version(stamp: str, product_key: str, rows: Iterable[sqlite3.Row]) -> str:
@@ -460,26 +493,41 @@ def publish_model(
         raise ValueError(f"Unsupported R2 model group: {model}")
     config = config or R2Config.from_environment()
     client = client or boto3_client(config)
-    state = PublishState(state_path or STATE_ROOT / f"r2_{model}.sqlite3")
+    state = PublishState(
+        state_path or STATE_ROOT / f"r2_{model}.sqlite3",
+        storage_scope=f"{config.account_id}/{config.bucket}",
+    )
     try:
         stamps = candidate_stamps(model, sync_retained, stamp)
         frames = discover_frames(model, stamps)
         uploaded = 0
         skipped = 0
+        incomplete = 0
+        pending: list[LocalFrame] = []
         for frame in frames:
             if state.unchanged(frame):
                 skipped += 1
                 continue
-            with optimized_png(frame.path) as upload_path:
-                sha256 = sha256_file(upload_path)
-                upload_frame(client, config, frame, upload_path, sha256)
-            state.record(frame, sha256)
-            uploaded += 1
+            if not is_complete_png(frame.path):
+                incomplete += 1
+                continue
+            pending.append(frame)
+
+        workers = max(1, min(8, int(os.environ.get("FCST_R2_UPLOAD_WORKERS", "2"))))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = {
+                pool.submit(optimize_and_upload, client, config, frame): frame for frame in pending
+            }
+            for future in as_completed(futures):
+                frame, sha256 = future.result()
+                state.record(frame, sha256)
+                uploaded += 1
         pruned = state.prune_expired(model)
         manifest = build_manifest(model, state.retained_rows(model), config.public_base_url)
         manifest_url = upload_manifest(client, config, model, manifest)
         print(
-            f"R2 {model}: uploaded={uploaded}, unchanged={skipped}, state_pruned={pruned}, "
+            f"R2 {model}: uploaded={uploaded}, unchanged={skipped}, incomplete={incomplete}, "
+            f"state_pruned={pruned}, "
             f"runs={len(manifest['runs'])}, manifest={manifest_url}",
             flush=True,
         )
@@ -487,6 +535,7 @@ def publish_model(
             "model": model,
             "uploaded": uploaded,
             "unchanged": skipped,
+            "incomplete": incomplete,
             "state_pruned": pruned,
             "manifest_url": manifest_url,
             "runs": len(manifest["runs"]),
