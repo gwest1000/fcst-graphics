@@ -273,10 +273,19 @@ def candidate_stamps(model: str, sync_retained: bool, requested_stamp: str | Non
     return sorted(stamps)
 
 
-def discover_frames(model: str, stamps: Iterable[str]) -> list[LocalFrame]:
+def discover_frames(
+    model: str,
+    stamps: Iterable[str],
+    enforce_retention: bool = False,
+    now: dt.datetime | None = None,
+) -> list[LocalFrame]:
     frames: list[LocalFrame] = []
+    now = now or dt.datetime.now(dt.timezone.utc)
     for stamp in sorted(set(stamps)):
+        init = parse_stamp(stamp)
         for product_key in MODEL_PRODUCTS[model]:
+            if enforce_retention and init < now - dt.timedelta(days=retention_days(product_key)):
+                continue
             product = PRODUCTS[product_key]
             plot_dir = source_root(product_key) / stamp
             for hour in product.hours:
@@ -499,7 +508,11 @@ def publish_model(
     )
     try:
         stamps = candidate_stamps(model, sync_retained, stamp)
-        frames = discover_frames(model, stamps)
+        frames = discover_frames(
+            model,
+            stamps,
+            enforce_retention=sync_retained and stamp is None,
+        )
         uploaded = 0
         skipped = 0
         incomplete = 0

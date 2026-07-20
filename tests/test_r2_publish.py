@@ -5,7 +5,17 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from r2_publish import PNG_END_MARKER, PublishState, build_manifest, is_complete_png, object_key_for
+from unittest import mock
+
+from r2_publish import (
+    PNG_END_MARKER,
+    PublishState,
+    build_manifest,
+    discover_frames,
+    is_complete_png,
+    object_key_for,
+)
+from publish_hrdps_west import PRODUCTS, image_name_for_hour
 
 
 class R2PublishTests(unittest.TestCase):
@@ -64,6 +74,30 @@ class R2PublishTests(unittest.TestCase):
             self.assertFalse(is_complete_png(path))
             path.write_bytes(b"png-payload" + PNG_END_MARKER)
             self.assertTrue(is_complete_png(path))
+
+    def test_retained_sync_filters_each_product_independently(self):
+        now = dt.datetime(2026, 7, 20, 12, tzinfo=dt.timezone.utc)
+        stamp = "20260710T12Z"
+        with tempfile.TemporaryDirectory() as tmp:
+            roots = {
+                "convective": Path(tmp) / "forecast",
+                "lightning_verif": Path(tmp) / "verification",
+            }
+            for key, root in roots.items():
+                hour = PRODUCTS[key].hours[0]
+                run_dir = root / stamp
+                run_dir.mkdir(parents=True)
+                (run_dir / image_name_for_hour(stamp, key, hour)).touch()
+            with mock.patch("r2_publish.MODEL_PRODUCTS", {"west": tuple(roots)}), mock.patch(
+                "r2_publish.source_root", side_effect=lambda key: roots[key]
+            ):
+                frames = discover_frames(
+                    "west",
+                    [stamp],
+                    enforce_retention=True,
+                    now=now,
+                )
+        self.assertEqual([frame.product_key for frame in frames], ["lightning_verif"])
 
 
 if __name__ == "__main__":
