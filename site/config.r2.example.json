@@ -1,0 +1,9 @@
+{
+  "defaultProduct": "continental_fourpanel",
+  "manifestUrls": [
+    "https://graphics-assets.example.com/manifests/continental.json",
+    "https://graphics-assets.example.com/manifests/west.json",
+    "https://graphics-assets.example.com/manifests/gefs_control.json",
+    "https://graphics-assets.example.com/manifests/ecmwf_control.json"
+  ]
+}

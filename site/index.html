@@ -1,0 +1,1302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="robots" content="noindex,nofollow" />
+    <title>Forecast Graphics Pilot</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --plot-aspect: 1.6;
+        --viewer-chrome-height: 52px;
+        --sidebar-width: 276px;
+        --hydro-blue: #05a1c6;
+        --hydro-green: #48a739;
+        --hydro-ink: #3e3935;
+        --nav-deep: #003d5d;
+        --nav-mid: #064d73;
+        --nav-row: #0b5f89;
+        --nav-active: #128bb4;
+        --paper: #eef2f3;
+        --panel: #ffffff;
+        --line: #cfd9de;
+        --muted: #63707a;
+        --shadow: 0 14px 34px rgba(24, 33, 38, 0.12);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        background: var(--paper);
+        color: #20262a;
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      button,
+      select,
+      input {
+        font: inherit;
+      }
+
+      button {
+        cursor: pointer;
+      }
+
+      .masthead {
+        display: grid;
+        gap: 10px;
+        align-content: start;
+        padding: 12px 10px 13px;
+        border-bottom: 4px solid var(--hydro-green);
+        background: var(--nav-deep);
+        color: #fff;
+      }
+
+      .brand {
+        display: flex;
+        min-width: 0;
+        gap: 7px;
+        align-items: center;
+      }
+
+      .brand-mark {
+        display: grid;
+        place-items: center;
+        width: 34px;
+        height: 34px;
+        border: 3px solid #fff;
+        border-radius: 7px;
+        background:
+          linear-gradient(135deg, var(--hydro-blue) 0 58%, var(--hydro-green) 58% 100%);
+        color: #fff;
+        font-size: 1rem;
+        font-weight: 900;
+        letter-spacing: 0;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 1.2rem;
+        line-height: 1.08;
+        letter-spacing: 0;
+      }
+
+      .top-tools {
+        display: grid;
+        gap: 7px;
+      }
+
+      .run-picker,
+      .status-pill {
+        display: flex;
+        gap: 8px;
+        align-items: center;
+        min-height: 34px;
+        padding: 5px 9px;
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        background: rgba(255, 255, 255, 0.1);
+        color: #fff;
+        font-weight: 800;
+      }
+
+      .run-picker {
+        font-size: 0.92rem;
+      }
+
+      .run-picker select {
+        min-width: 0;
+        width: 100%;
+        border: 0;
+        border-radius: 4px;
+        background: #fff;
+        color: #12242d;
+        padding: 5px 8px;
+        font-weight: 750;
+      }
+
+      .status-pill {
+        color: #e9f8fb;
+        font-size: 0.84rem;
+      }
+
+      .workspace {
+        display: grid;
+        grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        min-height: 100vh;
+        background: #c4cacd;
+        border-right: 1px solid #87939a;
+      }
+
+      .menu {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      .category-title,
+      .menu-button {
+        width: 100%;
+        min-height: 39px;
+        border: 0;
+        border-bottom: 1px solid rgba(0, 0, 0, 0.42);
+        border-radius: 0;
+        text-align: left;
+      }
+
+      .category-title {
+        display: flex;
+        align-items: center;
+        padding: 8px 12px;
+        background: var(--nav-deep);
+        color: #fff;
+        font-size: 0.98rem;
+        font-weight: 850;
+      }
+
+      .menu-button {
+        display: grid;
+        grid-template-columns: 27px minmax(0, 1fr);
+        gap: 6px;
+        align-items: center;
+        padding: 0 10px 0 9px;
+        color: #e6f8fc;
+        background: var(--nav-mid);
+        font-size: 0.94rem;
+        font-weight: 800;
+      }
+
+      .menu-button:hover,
+      .menu-button:focus-visible {
+        background: var(--nav-row);
+        outline: none;
+      }
+
+      .menu-button .label {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .menu-button.area {
+        background: var(--nav-active);
+        color: #061920;
+      }
+
+      .menu-button.model {
+        min-height: 36px;
+        padding-left: 36px;
+        grid-template-columns: 1fr;
+        background: #d6ecfb;
+        color: #073653;
+      }
+
+      .menu-button.model.active {
+        background: #e7f4e4;
+        color: #173d18;
+        box-shadow: inset 6px 0 0 var(--hydro-green);
+      }
+
+      .menu-button.ptype.active {
+        background: #075b83;
+      }
+
+      .chevron {
+        display: inline-block;
+        width: 0;
+        height: 0;
+        margin-left: 8px;
+        border-top: 7px solid transparent;
+        border-bottom: 7px solid transparent;
+        border-left: 9px solid currentColor;
+      }
+
+      .expanded > .chevron {
+        transform: rotate(90deg);
+      }
+
+      .submenu {
+        max-height: 0;
+        overflow: hidden;
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transition:
+          max-height 180ms ease,
+          opacity 140ms ease,
+          visibility 0s linear 180ms;
+      }
+
+      .submenu.open {
+        max-height: 780px;
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+        transition:
+          max-height 180ms ease,
+          opacity 140ms ease;
+      }
+
+      .submenu[data-model-panel].open {
+        max-height: 160px;
+      }
+
+      .content {
+        min-width: 0;
+        height: 100vh;
+        overflow: hidden;
+        padding: 0;
+      }
+
+      body.player-only .workspace {
+        grid-template-columns: minmax(0, 1fr);
+      }
+
+      body.player-only .sidebar {
+        display: none;
+      }
+
+      body.player-only .content,
+      body.player-only .player {
+        height: 100vh;
+      }
+
+      body.player-only .player {
+        border: 0;
+        box-shadow: none;
+      }
+
+      .player {
+        display: grid;
+        grid-template-rows: auto minmax(0, 1fr);
+        height: 100%;
+        border: 1px solid var(--line);
+        background: var(--panel);
+        box-shadow: var(--shadow);
+      }
+
+      .controls {
+        display: grid;
+        grid-template-columns: repeat(3, auto) minmax(180px, 1fr) auto;
+        gap: 6px;
+        align-items: center;
+        padding: 7px 10px 6px;
+        border-bottom: 1px solid var(--line);
+        background: #f6f9fa;
+      }
+
+      .player.static-view {
+        grid-template-rows: minmax(0, 1fr);
+      }
+
+      .player.static-view .controls {
+        display: none;
+      }
+
+      .player.static-view .stage img {
+        width: 100%;
+        max-width: 100%;
+        height: 100%;
+        max-height: 100%;
+      }
+
+      .controls button,
+      .controls select {
+        min-height: 32px;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        background: #fff;
+        color: #18252b;
+        padding: 5px 9px;
+        font-weight: 850;
+        text-decoration: none;
+      }
+
+      .controls button:hover,
+      .controls button:focus-visible,
+      .controls select:hover,
+      .controls select:focus-visible {
+        border-color: var(--hydro-blue);
+        outline: none;
+      }
+
+      .controls .primary {
+        min-width: 70px;
+        border-color: var(--hydro-blue);
+        background: var(--hydro-blue);
+        color: #fff;
+      }
+
+      .range-wrap {
+        display: grid;
+        min-width: 0;
+        gap: 2px;
+      }
+
+      input[type="range"] {
+        width: 100%;
+        height: 14px;
+        accent-color: var(--hydro-green);
+      }
+
+      .slider-ticks {
+        position: relative;
+        height: 20px;
+        margin-top: 2px;
+        color: var(--muted);
+        font-size: 0.68rem;
+        line-height: 1;
+        font-weight: 800;
+      }
+
+      .slider-ticks span {
+        position: absolute;
+        top: 0;
+        transform: translateX(-50%);
+        white-space: nowrap;
+      }
+
+      .slider-ticks span:first-child {
+        transform: translateX(0);
+      }
+
+      .slider-ticks span:last-child {
+        transform: translateX(-65%);
+      }
+
+      .slider-ticks span.active {
+        color: var(--hydro-blue);
+      }
+
+      .stage {
+        min-height: 0;
+        height: auto;
+        overflow: hidden;
+        background: #e8edef;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+      }
+
+      .stage img {
+        flex: 0 1 auto;
+        display: block;
+        width: 100%;
+        max-width: 100%;
+        height: 100%;
+        max-height: 100%;
+        min-height: 0;
+        object-fit: contain;
+        background: #fff;
+      }
+
+      @media (max-width: 900px) {
+        .workspace {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          min-height: 0;
+          border-right: 0;
+          border-bottom: 1px solid #87939a;
+        }
+
+        .content,
+        .player {
+          height: auto;
+          overflow: visible;
+        }
+
+        .stage {
+          height: min(75vh, calc(100vw / var(--plot-aspect)));
+        }
+      }
+
+      @media (max-width: 680px) {
+        .masthead {
+          padding: 12px;
+        }
+
+        h1 {
+          font-size: 1.1rem;
+          overflow-wrap: anywhere;
+        }
+
+        .brand-mark {
+          width: 34px;
+          height: 34px;
+        }
+
+        .top-tools,
+        .run-picker {
+          width: 100%;
+        }
+
+        .run-picker select {
+          min-width: 0;
+          flex: 1;
+        }
+
+        .controls {
+          grid-template-columns: 1fr;
+        }
+
+        .menu-button {
+          min-height: 42px;
+          padding-top: 6px;
+          padding-bottom: 6px;
+        }
+
+        .menu-button .label {
+          overflow: visible;
+          text-overflow: clip;
+          white-space: normal;
+          line-height: 1.18;
+          overflow-wrap: anywhere;
+        }
+
+      }
+    </style>
+  </head>
+  <body>
+    <div class="workspace">
+      <aside class="sidebar" aria-label="Plot menu">
+        <header class="masthead">
+          <div class="brand">
+            <div class="brand-mark" aria-hidden="true">BC</div>
+            <h1>Forecast Graphics Pilot</h1>
+          </div>
+          <div class="top-tools">
+            <label class="run-picker" for="runSelect">
+              Run
+              <select id="runSelect" aria-label="Model run"></select>
+            </label>
+            <div class="status-pill" id="runStatus">Loading runs</div>
+          </div>
+        </header>
+        <ul class="menu">
+          <li class="category">
+            <div class="category-title">4-Panel</div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="fourpanel">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">Convective 4-Panel</span>
+            </button>
+            <div class="submenu" data-plot-panel="fourpanel">
+              <button class="menu-button area" type="button" data-area-toggle="fourpanel">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">BC</span>
+              </button>
+              <div class="submenu" data-model-panel="fourpanel">
+                <button class="menu-button model" type="button" data-product-select="continental_fourpanel">HRDPS 2.5 km</button>
+              </div>
+            </div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="synoptic_fourpanel">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">Synoptic 4-Panel</span>
+            </button>
+            <div class="submenu" data-plot-panel="synoptic_fourpanel">
+              <button class="menu-button area" type="button" data-area-toggle="synoptic_fourpanel">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">BC</span>
+              </button>
+              <div class="submenu" data-model-panel="synoptic_fourpanel">
+                <button class="menu-button model" type="button" data-product-select="ecmwf_control_fourpanel">ECMWF IFS Control</button>
+                <button class="menu-button model" type="button" data-product-select="gefs_control_fourpanel">GEFS Control</button>
+              </div>
+            </div>
+          </li>
+          <li class="category">
+            <div class="category-title">Surface</div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="convective">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">Convective Gust Potential</span>
+            </button>
+            <div class="submenu" data-plot-panel="convective">
+              <button class="menu-button area" type="button" data-area-toggle="convective">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">BC</span>
+              </button>
+              <div class="submenu" data-model-panel="convective">
+                <button class="menu-button model" type="button" data-product-select="convective">HRDPS-West 1 km</button>
+                <button class="menu-button model" type="button" data-product-select="continental_convective">HRDPS 2.5 km</button>
+              </div>
+            </div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="lightning">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">Fire Weather</span>
+            </button>
+            <div class="submenu" data-plot-panel="lightning">
+              <button class="menu-button area" type="button" data-area-toggle="lightning_bc">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">BC</span>
+              </button>
+              <div class="submenu" data-model-panel="lightning_bc">
+                <button class="menu-button model" type="button" data-product-select="continental_lightning_twopanel">HRDPS 2.5 km</button>
+              </div>
+              <button class="menu-button area" type="button" data-area-toggle="lightning_sw">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">Southwest BC</span>
+              </button>
+              <div class="submenu" data-model-panel="lightning_sw">
+                <button class="menu-button model" type="button" data-product-select="lightning_sw">HRDPS-West 1 km</button>
+              </div>
+              <button class="menu-button area" type="button" data-area-toggle="lightning_se">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">Southeast BC</span>
+              </button>
+              <div class="submenu" data-model-panel="lightning_se">
+                <button class="menu-button model" type="button" data-product-select="lightning_se">HRDPS-West 1 km</button>
+              </div>
+              <button class="menu-button area" type="button" data-area-toggle="lightning_ne">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">Northeast BC</span>
+              </button>
+              <div class="submenu" data-model-panel="lightning_ne">
+                <button class="menu-button model" type="button" data-product-select="lightning_ne">HRDPS-West 1 km</button>
+              </div>
+            </div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="lightning_onepanel">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">Fire Weather 1-panel</span>
+            </button>
+            <div class="submenu" data-plot-panel="lightning_onepanel">
+              <button class="menu-button area" type="button" data-area-toggle="lightning_onepanel">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">BC</span>
+              </button>
+              <div class="submenu" data-model-panel="lightning_onepanel">
+                <button class="menu-button model" type="button" data-product-select="continental_lightning">HRDPS 2.5 km</button>
+              </div>
+            </div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="fwi2025_danger">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">Experimental Hourly Fire Danger</span>
+            </button>
+            <div class="submenu" data-plot-panel="fwi2025_danger">
+              <button class="menu-button area" type="button" data-area-toggle="fwi2025_danger">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">BC</span>
+              </button>
+              <div class="submenu" data-model-panel="fwi2025_danger">
+                <button class="menu-button model" type="button" data-product-select="fwi2025_danger">HRDPS-West 1 km</button>
+                <button class="menu-button model" type="button" data-product-select="continental_fwi2025_danger">HRDPS 2.5 km</button>
+              </div>
+            </div>
+          </li>
+          <li class="category">
+            <div class="category-title">Verification</div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="lightning_verif">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">LPI Verification</span>
+            </button>
+            <div class="submenu" data-plot-panel="lightning_verif">
+              <button class="menu-button area" type="button" data-area-toggle="lightning_verif">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">BC</span>
+              </button>
+              <div class="submenu" data-model-panel="lightning_verif">
+                <button class="menu-button model" type="button" data-product-select="lightning_verif">HRDPS-West 1 km</button>
+                <button class="menu-button model" type="button" data-product-select="continental_lightning_verif">HRDPS 2.5 km</button>
+              </div>
+            </div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="fire_danger_verif">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">Fire Danger Verification</span>
+            </button>
+            <div class="submenu" data-plot-panel="fire_danger_verif">
+              <button class="menu-button area" type="button" data-area-toggle="fire_danger_verif">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">BC</span>
+              </button>
+              <div class="submenu" data-model-panel="fire_danger_verif">
+                <button class="menu-button model" type="button" data-product-select="fire_danger_verif">HRDPS + BCWS</button>
+              </div>
+            </div>
+          </li>
+        </ul>
+      </aside>
+
+      <main class="content">
+        <section class="player" aria-label="Controllable forecast animation">
+          <div class="controls">
+            <button id="prevButton" type="button" aria-label="Previous frame">Prev</button>
+            <button id="playButton" class="primary" type="button" aria-label="Play animation">Play</button>
+            <button id="nextButton" type="button" aria-label="Next frame">Next</button>
+            <div class="range-wrap">
+              <input id="frameSlider" type="range" min="0" max="16" value="0" step="1" aria-label="Forecast hour" />
+              <div class="slider-ticks" id="sliderTicks" aria-hidden="true"></div>
+            </div>
+            <select id="speedSelect" aria-label="Animation speed">
+              <option value="1200">Slow</option>
+              <option value="750" selected>Normal</option>
+              <option value="420">Fast</option>
+              <option value="240">Very fast</option>
+            </select>
+          </div>
+          <div class="stage">
+            <img
+              id="animationImage"
+              alt="Forecast frame"
+            />
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      const fallbackRuns = [
+        {
+          stamp: "20260630T06Z",
+          init: "2026-06-30T06:00:00Z",
+          label: "2026-06-30 06Z",
+          assetVersion: "fallback",
+          imageBase: "./images/20260630T06Z/continental/",
+          products: {
+            continental_convective: {
+              key: "continental_convective",
+              label: "Convective Gust Potential",
+              category: "Surface",
+              plotType: "Convective Gust Potential",
+              area: "BC",
+              model: "HRDPS 2.5 km",
+              modelKey: "continental",
+              hours: Array.from({ length: 17 }, (_, index) => index * 3),
+              imageBase: "./images/20260630T06Z/continental/",
+              filePrefix: "hrdps_continental_convective_20260630T06Z",
+              assetVersion: "fallback",
+            },
+            continental_fourpanel: {
+              key: "continental_fourpanel",
+              label: "Convective 4-Panel",
+              category: "4-Panel",
+              plotType: "Convective 4-Panel",
+              area: "BC",
+              model: "HRDPS 2.5 km",
+              modelKey: "continental",
+              hours: Array.from({ length: 17 }, (_, index) => index * 3),
+              imageBase: "./images/20260630T06Z/continental/fourpanel/",
+              filePrefix: "hrdps_continental_fourpanel_20260630T06Z",
+              assetVersion: "fallback",
+            },
+          },
+        },
+        {
+          stamp: "20260629T12Z",
+          init: "2026-06-29T12:00:00Z",
+          label: "2026-06-29 12Z",
+          assetVersion: "fallback",
+          imageBase: "./images/20260629T12Z/",
+          products: {
+            convective: {
+              key: "convective",
+              label: "Convective Gust Potential",
+              category: "Surface",
+              plotType: "Convective Gust Potential",
+              area: "BC",
+              model: "HRDPS-West 1 km",
+              hours: Array.from({ length: 17 }, (_, index) => index * 3),
+              imageBase: "./images/20260629T12Z/",
+              filePrefix: "hrdps_west_convective_20260629T12Z",
+              assetVersion: "fallback",
+            },
+          },
+        },
+      ];
+
+      const utc = new Intl.DateTimeFormat("en-CA", {
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "UTC",
+        timeZoneName: "short",
+        hour12: false,
+      });
+      const pacific = new Intl.DateTimeFormat("en-CA", {
+        weekday: "short",
+        year: "numeric",
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        timeZone: "America/Vancouver",
+        timeZoneName: "short",
+        hour12: false,
+      });
+      const runOptionFormatter = new Intl.DateTimeFormat("en-CA", {
+        month: "short",
+        day: "2-digit",
+        hour: "2-digit",
+        timeZone: "UTC",
+        timeZoneName: "short",
+        hour12: false,
+      });
+      const initialParams = new URLSearchParams(window.location.search);
+      const requestedProductKey = initialParams.get("product");
+      const requestedRunStamp = initialParams.get("run");
+      if (initialParams.get("player") === "1") {
+        document.body.classList.add("player-only");
+      }
+
+      const plotGroups = {
+        fourpanel: ["continental_fourpanel"],
+        synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
+        convective: ["convective", "continental_convective"],
+        lightning: [
+          "continental_lightning_twopanel",
+          "lightning_sw",
+          "lightning_se",
+          "lightning_ne",
+        ],
+        lightning_onepanel: ["continental_lightning"],
+        fwi2025_danger: ["fwi2025_danger", "continental_fwi2025_danger"],
+        lightning_verif: ["lightning_verif", "continental_lightning_verif"],
+        fire_danger_verif: ["fire_danger_verif"],
+      };
+      const areaGroups = {
+        fourpanel: ["continental_fourpanel"],
+        synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
+        convective: ["convective", "continental_convective"],
+        lightning_bc: ["continental_lightning_twopanel"],
+        lightning_sw: ["lightning_sw"],
+        lightning_se: ["lightning_se"],
+        lightning_ne: ["lightning_ne"],
+        lightning_onepanel: ["continental_lightning"],
+        fwi2025_danger: ["fwi2025_danger", "continental_fwi2025_danger"],
+        lightning_verif: ["lightning_verif", "continental_lightning_verif"],
+        fire_danger_verif: ["fire_danger_verif"],
+      };
+      const areaPlotGroups = {
+        fourpanel: "fourpanel",
+        synoptic_fourpanel: "synoptic_fourpanel",
+        convective: "convective",
+        lightning_bc: "lightning",
+        lightning_sw: "lightning",
+        lightning_se: "lightning",
+        lightning_ne: "lightning",
+        lightning_onepanel: "lightning_onepanel",
+        fwi2025_danger: "fwi2025_danger",
+        lightning_verif: "lightning_verif",
+        fire_danger_verif: "fire_danger_verif",
+      };
+      const productKeys = [...new Set(Object.values(areaGroups).flat())];
+      const runSelect = document.querySelector("#runSelect");
+      const runStatus = document.querySelector("#runStatus");
+      const animationImage = document.querySelector("#animationImage");
+      const sliderTicks = document.querySelector("#sliderTicks");
+      const frameSlider = document.querySelector("#frameSlider");
+      const playButton = document.querySelector("#playButton");
+      const prevButton = document.querySelector("#prevButton");
+      const nextButton = document.querySelector("#nextButton");
+      const speedSelect = document.querySelector("#speedSelect");
+
+      let runs = fallbackRuns;
+      let activeRunIndex = 0;
+      let activeRun = fallbackRuns[0];
+      let activeProductKey = "continental_fourpanel";
+      let expandedPlotKey = "fourpanel";
+      let expandedAreaKey = "fourpanel";
+      let frames = [];
+      let sliderTickLabels = [];
+      let currentIndex = 0;
+      let timer = null;
+      let manifestVersion = "fallback";
+
+      function padHour(hour) {
+        return String(hour).padStart(3, "0");
+      }
+
+      function runLabel(run) {
+        const date = new Date(run.init);
+        return run.label || `${run.stamp} (${runOptionFormatter.format(date)})`;
+      }
+
+      function legacyProduct(run) {
+        const hours = Array.from({ length: 17 }, (_, index) => index * 3);
+        return {
+          key: "convective",
+          label: "Convective Gust Potential",
+          category: "Surface",
+          plotType: "Convective Gust Potential",
+          area: "BC",
+          model: "HRDPS-West 1 km",
+          hours,
+          imageBase: run.imageBase || `./images/${run.stamp}/`,
+          filePrefix: `hrdps_west_convective_${run.stamp}`,
+          assetVersion: run.assetVersion || run.stamp,
+        };
+      }
+
+      function productFor(run, key) {
+        if (run.products && run.products[key]) {
+          return run.products[key];
+        }
+        return !run.products && key === "convective" ? legacyProduct(run) : null;
+      }
+
+      function groupForProduct(productKey) {
+        for (const [groupKey, keys] of Object.entries(plotGroups)) {
+          if (keys.includes(productKey)) {
+            return groupKey;
+          }
+        }
+        return "convective";
+      }
+
+      function areaForProduct(productKey) {
+        for (const [areaKey, keys] of Object.entries(areaGroups)) {
+          if (keys.includes(productKey)) {
+            return areaKey;
+          }
+        }
+        return groupForProduct(productKey);
+      }
+
+      function runIndexWithProduct(productKey) {
+        return runs.findIndex((run) => Boolean(productFor(run, productKey)));
+      }
+
+      function productAvailable(productKey) {
+        return Boolean(productFor(activeRun, productKey)) || runIndexWithProduct(productKey) >= 0;
+      }
+
+      function currentProduct() {
+        return (
+          productFor(activeRun, activeProductKey) ||
+          productFor(activeRun, "continental_convective") ||
+          productFor(activeRun, "convective") ||
+          productFor(activeRun, "continental_lightning_twopanel") ||
+          productFor(activeRun, "continental_lightning") ||
+          productFor(activeRun, "lightning") ||
+          productFor(activeRun, "continental_lightning_sw") ||
+          productFor(activeRun, "lightning_sw") ||
+          productFor(activeRun, "continental_lightning_se") ||
+          productFor(activeRun, "lightning_se") ||
+          productFor(activeRun, "continental_lightning_ne") ||
+          productFor(activeRun, "lightning_ne") ||
+          productFor(activeRun, "fwi2025_danger") ||
+          productFor(activeRun, "continental_fwi2025_danger") ||
+          productFor(activeRun, "fire_danger_verif") ||
+          productFor(activeRun, "continental_lightning_verif") ||
+          productFor(activeRun, "lightning_verif") ||
+          productFor(activeRun, "continental_fourpanel") ||
+          productFor(activeRun, "ecmwf_control_fourpanel") ||
+          productFor(activeRun, "gefs_control_fourpanel")
+        );
+      }
+
+      function assetUrl(product, filename) {
+        const base = product.imageBase || `./images/${activeRun.stamp}/`;
+        const assetVersion = product.assetVersion || activeRun.assetVersion || activeRun.stamp;
+        return `${base}${filename}?v=${encodeURIComponent(`${manifestVersion}-${assetVersion}`)}`;
+      }
+
+      function makeFrames(run, product) {
+        const init = new Date(run.init);
+        return product.hours.map((hour) => {
+          const fhour = padHour(hour);
+          const validDate = new Date(init.getTime() + hour * 60 * 60 * 1000);
+          const filename = `${product.filePrefix}_f${fhour}.png`;
+          return {
+            hour,
+            fhour,
+            validDate,
+            href: assetUrl(product, filename),
+            utcLabel: utc.format(validDate),
+            pacificLabel: pacific.format(validDate),
+          };
+        });
+      }
+
+      function renderRunOptions() {
+        runSelect.innerHTML = "";
+        for (const [index, run] of runs.entries()) {
+          const option = document.createElement("option");
+          option.value = String(index);
+          option.textContent = runLabel(run);
+          runSelect.appendChild(option);
+        }
+      }
+
+      function renderMenu() {
+        for (const [groupKey, keys] of Object.entries(plotGroups)) {
+          const groupActive = keys.includes(activeProductKey);
+          const plotButton = document.querySelector(`[data-plot-toggle="${groupKey}"]`);
+          const plotPanel = document.querySelector(`[data-plot-panel="${groupKey}"]`);
+          plotButton.disabled = false;
+          plotButton.classList.toggle("active", groupActive);
+          plotButton.classList.toggle("expanded", groupKey === expandedPlotKey);
+          plotPanel.classList.toggle("open", groupKey === expandedPlotKey);
+        }
+        for (const [areaKey, keys] of Object.entries(areaGroups)) {
+          const groupKey = areaPlotGroups[areaKey] || areaKey;
+          const areaButton = document.querySelector(`[data-area-toggle="${areaKey}"]`);
+          const modelPanel = document.querySelector(`[data-model-panel="${areaKey}"]`);
+          if (!areaButton || !modelPanel) {
+            continue;
+          }
+          areaButton.disabled = false;
+          areaButton.classList.toggle("expanded", areaKey === expandedAreaKey);
+          modelPanel.classList.toggle("open", groupKey === expandedPlotKey && areaKey === expandedAreaKey);
+        }
+        for (const key of productKeys) {
+          const modelButton = document.querySelector(`[data-product-select="${key}"]`);
+          if (!modelButton) {
+            continue;
+          }
+          const available = productAvailable(key);
+          modelButton.disabled = !available;
+          modelButton.classList.toggle("active", key === activeProductKey);
+        }
+      }
+
+      function renderSliderTicks() {
+        sliderTicks.innerHTML = "";
+        sliderTickLabels = [];
+        if (!frames.length) {
+          return;
+        }
+        const denominator = Math.max(frames.length - 1, 1);
+        frames.forEach((frame, index) => {
+          const tick = document.createElement("span");
+          tick.textContent = String(frame.hour);
+          tick.style.left = `${(index / denominator) * 100}%`;
+          tick.dataset.frameIndex = String(index);
+          sliderTicks.appendChild(tick);
+          sliderTickLabels.push(tick);
+        });
+      }
+
+      function preloadFrames() {
+        frames.forEach((frame) => {
+          const img = new Image();
+          img.src = frame.href;
+        });
+      }
+
+      function setProduct(productKey, openArea = true) {
+        const nextRunIndex = runIndexWithProduct(productKey);
+        if (nextRunIndex < 0) {
+          return;
+        }
+        activeRunIndex = nextRunIndex;
+        activeRun = runs[nextRunIndex];
+        runSelect.value = String(nextRunIndex);
+        const product = productFor(activeRun, productKey);
+        stopAnimation();
+        activeProductKey = productKey;
+        expandedPlotKey = groupForProduct(productKey);
+        expandedAreaKey = openArea ? areaForProduct(productKey) : "";
+        renderMenu();
+        renderActiveView();
+        updateLocationState();
+        frameSlider.focus({ preventScroll: true });
+      }
+
+      function renderActiveView() {
+        const product = currentProduct();
+        if (!product) {
+          return;
+        }
+        runStatus.textContent = runLabel(activeRun);
+        frames = makeFrames(activeRun, product);
+        document.querySelector(".player").classList.toggle("static-view", frames.length <= 1);
+        frameSlider.max = String(Math.max(frames.length - 1, 0));
+        renderSliderTicks();
+        preloadFrames();
+        setFrame(0);
+      }
+
+      function setRun(index) {
+        stopAnimation();
+        activeRunIndex = index;
+        activeRun = runs[index] || runs[0] || fallbackRuns[0];
+        runSelect.value = String(index);
+        if (!productFor(activeRun, activeProductKey)) {
+          const fallbackProduct = [
+            "continental_convective",
+            "convective",
+            "continental_lightning_twopanel",
+            "continental_lightning",
+            "lightning",
+            "continental_lightning_sw",
+            "lightning_sw",
+            "continental_lightning_se",
+            "lightning_se",
+            "continental_lightning_ne",
+            "lightning_ne",
+            "fwi2025_danger",
+            "continental_fwi2025_danger",
+            "fire_danger_verif",
+            "continental_lightning_verif",
+            "lightning_verif",
+            "continental_fourpanel",
+            "ecmwf_control_fourpanel",
+            "gefs_control_fourpanel",
+          ].find((key) => Boolean(productFor(activeRun, key)));
+          if (fallbackProduct) {
+            activeProductKey = fallbackProduct;
+          }
+        }
+        expandedPlotKey = groupForProduct(activeProductKey);
+        expandedAreaKey = areaForProduct(activeProductKey);
+        renderMenu();
+        renderActiveView();
+        updateLocationState();
+      }
+
+      function updateLocationState() {
+        if (!activeRun || !activeProductKey) {
+          return;
+        }
+        const targetUrl = new URL(window.location.href);
+        targetUrl.searchParams.set("product", activeProductKey);
+        targetUrl.searchParams.set("run", activeRun.stamp);
+        window.history.replaceState({}, "", targetUrl);
+      }
+
+      function setFrame(index) {
+        if (!frames.length) {
+          return;
+        }
+        currentIndex = (index + frames.length) % frames.length;
+        const frame = frames[currentIndex];
+        const product = currentProduct();
+        animationImage.src = frame.href;
+        animationImage.alt = `${product.label} F${frame.fhour}`;
+        frameSlider.value = String(currentIndex);
+        sliderTickLabels.forEach((tick) => {
+          tick.classList.toggle("active", Number(tick.dataset.frameIndex) === currentIndex);
+        });
+      }
+
+      function setManualFrame(index) {
+        if (!frames.length) {
+          return;
+        }
+        setFrame(Math.max(0, Math.min(index, frames.length - 1)));
+      }
+
+      function advanceFrame() {
+        setFrame(currentIndex + 1);
+      }
+
+      function startAnimation() {
+        if (timer) {
+          return;
+        }
+        playButton.textContent = "Pause";
+        playButton.setAttribute("aria-label", "Pause animation");
+        timer = window.setInterval(advanceFrame, Number(speedSelect.value));
+      }
+
+      function stopAnimation() {
+        if (!timer) {
+          return;
+        }
+        window.clearInterval(timer);
+        timer = null;
+        playButton.textContent = "Play";
+        playButton.setAttribute("aria-label", "Play animation");
+      }
+
+      function restartAnimationIfPlaying() {
+        if (!timer) {
+          return;
+        }
+        stopAnimation();
+        startAnimation();
+      }
+
+      function openPlayerOnly(productKey) {
+        if (runIndexWithProduct(productKey) < 0) {
+          return;
+        }
+        const targetUrl = new URL(window.location.href);
+        targetUrl.search = "";
+        targetUrl.searchParams.set("player", "1");
+        targetUrl.searchParams.set("product", productKey);
+        window.open(targetUrl.toString(), "_blank", "noopener");
+      }
+
+      document.querySelectorAll("[data-plot-toggle]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const groupKey = button.dataset.plotToggle;
+          const willOpen = expandedPlotKey !== groupKey;
+          expandedPlotKey = willOpen ? groupKey : "";
+          expandedAreaKey = "";
+          renderMenu();
+        });
+      });
+
+      document.querySelectorAll("[data-area-toggle]").forEach((button) => {
+        button.addEventListener("click", () => {
+          const areaKey = button.dataset.areaToggle;
+          const groupKey = areaPlotGroups[areaKey] || areaKey;
+          expandedPlotKey = groupKey;
+          expandedAreaKey = expandedAreaKey === areaKey ? "" : areaKey;
+          renderMenu();
+        });
+      });
+
+      document.querySelectorAll("[data-product-select]").forEach((button) => {
+        button.addEventListener("click", (event) => {
+          const productKey = button.dataset.productSelect;
+          if (event.ctrlKey || event.metaKey) {
+            event.preventDefault();
+            openPlayerOnly(productKey);
+            return;
+          }
+          selectLatestProduct(productKey);
+        });
+      });
+
+      playButton.addEventListener("click", () => {
+        if (timer) {
+          stopAnimation();
+        } else {
+          startAnimation();
+        }
+      });
+
+      prevButton.addEventListener("click", () => {
+        stopAnimation();
+        setManualFrame(currentIndex - 1);
+      });
+
+      nextButton.addEventListener("click", () => {
+        stopAnimation();
+        setManualFrame(currentIndex + 1);
+      });
+
+      frameSlider.addEventListener("input", (event) => {
+        stopAnimation();
+        setFrame(Number(event.target.value));
+      });
+
+      speedSelect.addEventListener("change", restartAnimationIfPlaying);
+
+      runSelect.addEventListener("change", (event) => {
+        setRun(Number(event.target.value));
+      });
+
+      window.addEventListener("keydown", (event) => {
+        if (event.target instanceof Element && event.target.matches("input, select, button, a")) {
+          return;
+        }
+        if (event.key === "ArrowLeft") {
+          stopAnimation();
+          setManualFrame(currentIndex - 1);
+        } else if (event.key === "ArrowRight") {
+          stopAnimation();
+          setManualFrame(currentIndex + 1);
+        } else if (event.key === " ") {
+          event.preventDefault();
+          if (timer) {
+            stopAnimation();
+          } else {
+            startAnimation();
+          }
+        }
+      });
+
+      async function refreshRunManifest() {
+        let manifest = null;
+        try {
+          const configResponse = await fetch(`./config.json?v=${Date.now()}`, { cache: "no-store" });
+          const config = configResponse.ok ? await configResponse.json() : {};
+          const manifestUrls = Array.isArray(config.manifestUrls) && config.manifestUrls.length
+            ? config.manifestUrls
+            : ["./runs.json"];
+          const results = await Promise.allSettled(
+            manifestUrls.map(async (url) => {
+              const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}v=${Date.now()}`, {
+                cache: "no-store",
+              });
+              if (!response.ok) {
+                throw new Error(`${url}: HTTP ${response.status}`);
+              }
+              return response.json();
+            }),
+          );
+          const runMap = new Map();
+          const generatedValues = [];
+          for (const result of results) {
+            if (result.status !== "fulfilled" || !Array.isArray(result.value.runs)) {
+              if (result.status === "rejected") {
+                console.warn("Forecast manifest failed to load.", result.reason);
+              }
+              continue;
+            }
+            generatedValues.push(result.value.generated || "");
+            for (const candidate of result.value.runs) {
+              const existing = runMap.get(candidate.stamp);
+              if (existing) {
+                existing.products = { ...(existing.products || {}), ...(candidate.products || {}) };
+              } else {
+                runMap.set(candidate.stamp, {
+                  ...candidate,
+                  products: { ...(candidate.products || {}) },
+                });
+              }
+            }
+          }
+          if (runMap.size) {
+            runs = [...runMap.values()].sort(
+              (left, right) => new Date(right.init).getTime() - new Date(left.init).getTime(),
+            );
+            manifestVersion = generatedValues.sort().at(-1) || String(Date.now());
+            manifest = {
+              generated: manifestVersion,
+              defaultProduct: config.defaultProduct || "continental_fourpanel",
+              runs,
+            };
+          }
+        } catch (error) {
+          console.warn("Using fallback forecast run list.", error);
+        }
+        renderRunOptions();
+        return manifest;
+      }
+
+      async function selectLatestProduct(productKey) {
+        await refreshRunManifest();
+        setProduct(productKey, true);
+      }
+
+      async function loadRuns() {
+        const manifest = await refreshRunManifest();
+        if (manifest && !requestedProductKey) {
+          activeProductKey = manifest.defaultProduct || activeProductKey;
+        }
+        if (requestedProductKey) {
+          const requestedRunIndex = requestedRunStamp
+            ? runs.findIndex((run) => run.stamp === requestedRunStamp)
+            : -1;
+          const productRunIndex =
+            requestedRunIndex >= 0 && productFor(runs[requestedRunIndex], requestedProductKey)
+              ? requestedRunIndex
+              : runIndexWithProduct(requestedProductKey);
+          if (productRunIndex >= 0) {
+            activeRunIndex = productRunIndex;
+            activeProductKey = requestedProductKey;
+          }
+        }
+        setRun(activeRunIndex);
+      }
+
+      loadRuns();
+    </script>
+  </body>
+</html>
