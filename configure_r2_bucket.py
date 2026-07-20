@@ -32,29 +32,33 @@ def main(argv: Iterable[str]) -> int:
                     "AllowedMethods": ["GET", "HEAD"],
                     "AllowedOrigins": [args.site_origin],
                     "AllowedHeaders": ["*"],
-                    "ExposeHeaders": ["ETag"],
-                    "MaxAgeSeconds": 3600,
+                    "ExposeHeaders": [
+                        "ETag",
+                        "Content-Length",
+                        "Content-Type",
+                        "Last-Modified",
+                    ],
+                    "MaxAgeSeconds": 86400,
                 }
             ]
         },
     )
-    rules = []
+    rules = [
+        {
+            "ID": "expire-all-model-data",
+            "Status": "Enabled",
+            "Filter": {"Prefix": "models/"},
+            "Expiration": {"Days": 61},
+        }
+    ]
     for model in MODEL_PRODUCTS:
-        rules.extend(
-            [
-                {
-                    "ID": f"expire-{model}-forecasts",
-                    "Status": "Enabled",
-                    "Filter": {"Prefix": f"models/{model}/forecast/"},
-                    "Expiration": {"Days": 8},
-                },
-                {
-                    "ID": f"expire-{model}-verification",
-                    "Status": "Enabled",
-                    "Filter": {"Prefix": f"models/{model}/verification/"},
-                    "Expiration": {"Days": 61},
-                },
-            ]
+        rules.append(
+            {
+                "ID": f"expire-{model.replace('_', '-')}-forecasts",
+                "Status": "Enabled",
+                "Filter": {"Prefix": f"models/{model}/forecast/"},
+                "Expiration": {"Days": 8},
+            }
         )
     client.put_bucket_lifecycle_configuration(
         Bucket=config.bucket,
@@ -69,4 +73,3 @@ def main(argv: Iterable[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(__import__("sys").argv[1:]))
-

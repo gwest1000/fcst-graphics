@@ -35,6 +35,9 @@ MANIFEST_CACHE_CONTROL = "no-cache, max-age=0, must-revalidate"
 PUBLISH_FORMAT_VERSION = "pngquant-70-90-speed1-v1"
 STATE_ROOT = Path("logs/state")
 PNG_END_MARKER = b"\x00\x00\x00\x00IEND\xaeB\x60\x82"
+KEYCHAIN_ACCOUNT = "fcst-graphics"
+KEYCHAIN_ACCESS_KEY_SERVICE = "fcstGraphics-r2-access-key-id"
+KEYCHAIN_SECRET_KEY_SERVICE = "fcstGraphics-r2-secret-access-key"
 
 MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
     "continental": (
@@ -80,10 +83,16 @@ class R2Config:
 
     @classmethod
     def from_environment(cls) -> "R2Config":
+        access_key_id = os.environ.get("FCST_R2_ACCESS_KEY_ID", "").strip()
+        secret_access_key = os.environ.get("FCST_R2_SECRET_ACCESS_KEY", "").strip()
+        if not access_key_id:
+            access_key_id = keychain_password(KEYCHAIN_ACCESS_KEY_SERVICE)
+        if not secret_access_key:
+            secret_access_key = keychain_password(KEYCHAIN_SECRET_KEY_SERVICE)
         values = {
             "account_id": os.environ.get("FCST_R2_ACCOUNT_ID", "").strip(),
-            "access_key_id": os.environ.get("FCST_R2_ACCESS_KEY_ID", "").strip(),
-            "secret_access_key": os.environ.get("FCST_R2_SECRET_ACCESS_KEY", "").strip(),
+            "access_key_id": access_key_id,
+            "secret_access_key": secret_access_key,
             "bucket": os.environ.get("FCST_R2_BUCKET", "").strip(),
             "public_base_url": os.environ.get("FCST_R2_PUBLIC_BASE_URL", "").strip().rstrip("/"),
         }
@@ -95,6 +104,19 @@ class R2Config:
     @property
     def endpoint_url(self) -> str:
         return f"https://{self.account_id}.r2.cloudflarestorage.com"
+
+
+def keychain_password(service: str, account: str = KEYCHAIN_ACCOUNT) -> str:
+    security = shutil.which("security")
+    if security is None:
+        return ""
+    result = subprocess.run(
+        [security, "find-generic-password", "-a", account, "-s", service, "-w"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    return result.stdout.strip() if result.returncode == 0 else ""
 
 
 @dataclass(frozen=True)

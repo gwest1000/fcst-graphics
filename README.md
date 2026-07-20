@@ -45,6 +45,27 @@ compress and upload two files in parallel by default, and update a model's
 manifest only after its images are available. Set `FCST_R2_UPLOAD_WORKERS` in
 `.env` to tune that bounded concurrency.
 
+## Free-tier monitoring
+
+`monitor_r2_usage.py` checks Cloudflare's account-wide analytics for current R2
+storage plus billing-period Class A and Class B operations, projects operation
+usage through the end of the billing period, and sends a macOS notification at
+70% projected usage (critical at 90%). After three consecutive check failures it
+also alerts that monitoring is unavailable. The analytics-only check does not
+consume an R2 operation.
+Install its four-times-daily launch agent with:
+
+```bash
+scripts/launchd/install_r2_usage_monitor.sh
+```
+
+The default checks run at 02:00, 10:00, 14:00, and 22:00 local time. Current
+results are written to `logs/r2_usage_latest.json`. R2 credentials and the
+Cloudflare analytics token are kept in macOS Keychain.
+The publisher token is intentionally limited to bucket object read/write. Bucket
+CORS and lifecycle configuration therefore requires a separate administrative
+credential if `configure_r2_bucket.py` must be rerun.
+
 ## Web viewer
 
 `site/config.json` lists the independently published model manifests. During

@@ -1,7 +1,9 @@
 {
   "defaultProduct": "continental_fourpanel",
   "manifestUrls": [
-    "https://gwest1000.github.io/fcstpp-reports/hrdps-west/runs.json"
+    "https://pub-969ec1fc2e19465797efb65b276a58da.r2.dev/manifests/continental.json",
+    "https://pub-969ec1fc2e19465797efb65b276a58da.r2.dev/manifests/west.json",
+    "https://pub-969ec1fc2e19465797efb65b276a58da.r2.dev/manifests/gefs_control.json",
+    "https://pub-969ec1fc2e19465797efb65b276a58da.r2.dev/manifests/ecmwf_control.json"
   ]
 }
-
