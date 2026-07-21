@@ -11,8 +11,45 @@ import plot_style
 
 
 class HrdpsFourPanelTest(unittest.TestCase):
+    def tearDown(self) -> None:
+        fourpanel.set_model("west")
+
     def test_transmission_lines_are_limited_to_right_hand_panels(self) -> None:
         self.assertEqual(fourpanel.TRANSMISSION_PANEL_INDICES, (1, 3))
+
+    def test_continental_domain_reaches_the_bc_yukon_border_and_preserves_aspect(self) -> None:
+        fourpanel.set_model("continental")
+        expanded = fourpanel.fourpanel_extent()
+        original = fourpanel.model_config().extent
+
+        self.assertLessEqual(expanded[2], 45.5)
+        self.assertGreaterEqual(expanded[3], 59.7)
+        self.assertLess(expanded[0], original[0])
+        self.assertGreater(expanded[1], original[1])
+
+        def projected_ratio(extent: tuple[float, float, float, float]) -> float:
+            west, east, south, north = extent
+            edge_points = np.linspace(0.0, 1.0, 101)
+            longitude = np.concatenate(
+                (
+                    west + (east - west) * edge_points,
+                    west + (east - west) * edge_points,
+                    np.full_like(edge_points, west),
+                    np.full_like(edge_points, east),
+                )
+            )
+            latitude = np.concatenate(
+                (
+                    np.full_like(edge_points, south),
+                    np.full_like(edge_points, north),
+                    south + (north - south) * edge_points,
+                    south + (north - south) * edge_points,
+                )
+            )
+            points = fourpanel.PANEL_PROJ.transform_points(fourpanel.DATA_CRS, longitude, latitude)
+            return np.ptp(points[:, 0]) / np.ptp(points[:, 1])
+
+        self.assertAlmostEqual(projected_ratio(expanded), projected_ratio(original), delta=0.01)
 
     def test_static_model_topography_is_required_at_its_available_hour(self) -> None:
         stamp = "20260720T06Z"

@@ -119,6 +119,13 @@ TERRAIN_COLORS = [
     "#281411",
 ]
 TRANSMISSION_PANEL_INDICES = (1, 3)
+CONTINENTAL_FOURPANEL_EXTENT = (-141.0, -106.7, 45.5, 59.8)
+
+
+def fourpanel_extent() -> tuple[float, float, float, float]:
+    if model_config().key == "continental":
+        return CONTINENTAL_FOURPANEL_EXTENT
+    return model_config().extent
 
 
 def log(message: str) -> None:
@@ -451,23 +458,27 @@ def temp850_contour_groups() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.nda
     return standard, zero, warm, hot
 
 
-def add_base_features(ax: plt.Axes) -> None:
-    hrdps.add_base_features(ax)
+def add_base_features(ax: plt.Axes, extent: tuple[float, float, float, float]) -> None:
+    hrdps.add_base_features(ax, extent=extent)
 
 
-def load_watersheds(cache_path: Path, refresh: bool = False) -> list[BaseGeometry]:
-    return hrdps.load_watersheds(cache_path, refresh=refresh)
+def load_watersheds(
+    cache_path: Path,
+    refresh: bool = False,
+    extent: tuple[float, float, float, float] | None = None,
+) -> list[BaseGeometry]:
+    return hrdps.load_watersheds(cache_path, refresh=refresh, extent=extent)
 
 
 def add_watersheds(ax: plt.Axes, watersheds: list[BaseGeometry]) -> None:
     hrdps.add_watersheds(ax, watersheds)
 
 
-def load_transmission_lines() -> list[BaseGeometry]:
+def load_transmission_lines(extent: tuple[float, float, float, float]) -> list[BaseGeometry]:
     # Lazy imports avoid the lightning/four-panel diagnostic dependency cycle.
     from make_hrdps_west_lightning import load_transmission_lines as load_lines
 
-    return load_lines()
+    return load_lines(extent=extent)
 
 
 def add_transmission_lines(ax: plt.Axes, lines: list[BaseGeometry]) -> None:
@@ -520,6 +531,7 @@ def plot_fourpanel(
     fhour: int,
     lat: np.ndarray,
     lon: np.ndarray,
+    extent: tuple[float, float, float, float],
     yslice: slice,
     xslice: slice,
     terrain_m: np.ndarray,
@@ -539,7 +551,7 @@ def plot_fourpanel(
     axes = [fig.add_axes(position, projection=PANEL_PROJ) for position in plot_style.FOURPANEL_POSITIONS]
 
     for ax in axes:
-        add_base_features(ax)
+        add_base_features(ax, extent)
     for panel_index in TRANSMISSION_PANEL_INDICES:
         add_transmission_lines(axes[panel_index], transmission_lines)
 
@@ -860,9 +872,14 @@ def make_plots(
     _, lat, lon = read_grib(sample_path, coords=True)
     if lat is None or lon is None:
         raise RuntimeError("Could not read model coordinates.")
-    yslice, xslice = subset_slices(lat, lon, model_config().extent)
-    watersheds = [] if no_watersheds else load_watersheds(watershed_cache, refresh=refresh_watersheds)
-    transmission_lines = load_transmission_lines()
+    extent = fourpanel_extent()
+    yslice, xslice = subset_slices(lat, lon, extent)
+    watersheds = (
+        []
+        if no_watersheds
+        else load_watersheds(watershed_cache, refresh=refresh_watersheds, extent=extent)
+    )
+    transmission_lines = load_transmission_lines(extent)
     terrain_m = crop(
         hour_file(run_dir, run, hrdps.TERRAIN_FHOUR, "HGT", "SFC", "0"),
         yslice,
@@ -881,6 +898,7 @@ def make_plots(
             fhour,
             lat,
             lon,
+            extent,
             yslice,
             xslice,
             terrain_m,

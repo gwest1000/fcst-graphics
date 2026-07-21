@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 import numpy as np
+from shapely.geometry import LineString
 
 import make_hrdps_west_lightning as lightning
 
@@ -75,6 +76,19 @@ class LightningDiagnosticTest(unittest.TestCase):
         self.assertEqual(len(lines), 1)
         west, east, south, north = lightning.model_config().extent
         self.assertTrue(lines[0].intersects(lightning.box(west, south, east, north)))
+
+    def test_transmission_lines_have_a_thin_white_halo(self) -> None:
+        axis = Mock()
+        lines = [LineString([(-125.0, 50.0), (-124.0, 51.0)])]
+
+        lightning.add_transmission_lines(axis, lines)
+
+        self.assertEqual(axis.add_geometries.call_count, 2)
+        halo = axis.add_geometries.call_args_list[0].kwargs
+        core = axis.add_geometries.call_args_list[1].kwargs
+        self.assertEqual(halo["edgecolor"], "#ffffff")
+        self.assertGreater(halo["linewidth"], core["linewidth"])
+        self.assertEqual(core["edgecolor"], lightning.TRANSMISSION_LINES_COLOR)
 
     def test_rh_hatch_categories_are_non_overlapping(self) -> None:
         rh = np.array([np.nan, 19.9, 20.0, 20.1, 30.0, 30.1, 60.0, 60.1, 80.0, 80.1])

@@ -683,24 +683,30 @@ def add_projected_feature(
     category: str,
     name: str,
     scale: str,
+    extent: tuple[float, float, float, float] | None = None,
     **style,
 ) -> None:
+    plot_extent = tuple(extent or model_config().extent)
     ax.add_geometries(
-        projected_natural_earth(category, name, scale, tuple(model_config().extent)),
+        projected_natural_earth(category, name, scale, plot_extent),
         crs=PANEL_PROJ,
         **style,
     )
 
 
-def add_base_features(ax: plt.Axes) -> None:
-    ax.set_extent(model_config().extent, crs=DATA_CRS)
+def add_base_features(
+    ax: plt.Axes,
+    extent: tuple[float, float, float, float] | None = None,
+) -> None:
+    plot_extent = extent or model_config().extent
+    ax.set_extent(plot_extent, crs=DATA_CRS)
     ax.set_aspect("equal", adjustable="box")
     ax.set_facecolor("#ffffff")
-    add_projected_feature(ax, "physical", "land", "50m", facecolor="#f5f4ef", edgecolor="none", zorder=0)
-    add_projected_feature(ax, "physical", "ocean", "50m", facecolor="#ffffff", edgecolor="none", zorder=0)
-    add_projected_feature(ax, "physical", "coastline", "10m", facecolor="none", edgecolor="black", linewidth=0.75, zorder=20)
-    add_projected_feature(ax, "cultural", "admin_0_boundary_lines_land", "50m", facecolor="none", edgecolor="black", linewidth=0.65, zorder=21)
-    add_projected_feature(ax, "cultural", "admin_1_states_provinces_lines", "50m", facecolor="none", edgecolor="black", linewidth=0.55, zorder=21)
+    add_projected_feature(ax, "physical", "land", "50m", plot_extent, facecolor="#f5f4ef", edgecolor="none", zorder=0)
+    add_projected_feature(ax, "physical", "ocean", "50m", plot_extent, facecolor="#ffffff", edgecolor="none", zorder=0)
+    add_projected_feature(ax, "physical", "coastline", "10m", plot_extent, facecolor="none", edgecolor="black", linewidth=0.75, zorder=20)
+    add_projected_feature(ax, "cultural", "admin_0_boundary_lines_land", "50m", plot_extent, facecolor="none", edgecolor="black", linewidth=0.65, zorder=21)
+    add_projected_feature(ax, "cultural", "admin_1_states_provinces_lines", "50m", plot_extent, facecolor="none", edgecolor="black", linewidth=0.55, zorder=21)
     ax.set_xticks([])
     ax.set_yticks([])
     try:
@@ -729,7 +735,11 @@ def read_watershed_source(source_path: Path) -> list[BaseGeometry]:
     raise ValueError(f"Unsupported watershed boundary format: {source_path}")
 
 
-def load_watersheds(cache_path: Path, refresh: bool = False) -> list[BaseGeometry]:
+def load_watersheds(
+    cache_path: Path,
+    refresh: bool = False,
+    extent: tuple[float, float, float, float] | None = None,
+) -> list[BaseGeometry]:
     try:
         source_path = Path(cache_path)
         if not source_path.exists():
@@ -739,8 +749,8 @@ def load_watersheds(cache_path: Path, refresh: bool = False) -> list[BaseGeometr
         log(f"Could not load watershed overlay: {exc}")
         return []
 
-    extent = model_config().extent
-    extent_poly = box(extent[0], extent[2], extent[1], extent[3])
+    plot_extent = extent or model_config().extent
+    extent_poly = box(plot_extent[0], plot_extent[2], plot_extent[1], plot_extent[3])
     geoms: list[BaseGeometry] = []
     for geom in source_geoms:
         if not geom.is_valid:

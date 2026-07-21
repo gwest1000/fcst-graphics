@@ -104,6 +104,9 @@ TRANSMISSION_LINES_PAGE_SIZE = 1000
 TRANSMISSION_LINES_COLOR = "#62676d"
 TRANSMISSION_LINES_WIDTH = 1.45
 TRANSMISSION_LINES_ALPHA = 0.86
+TRANSMISSION_LINES_HALO_COLOR = "#ffffff"
+TRANSMISSION_LINES_HALO_WIDTH = 2.55
+TRANSMISSION_LINES_HALO_ALPHA = 0.92
 _PROJECTED_TRANSMISSION_LINES: dict[int, tuple[BaseGeometry, ...]] = {}
 
 
@@ -199,7 +202,10 @@ def download_transmission_lines() -> dict[str, object]:
     return {"type": "FeatureCollection", "features": features}
 
 
-def load_transmission_lines(cache_path: Path = TRANSMISSION_LINES_CACHE) -> list[BaseGeometry]:
+def load_transmission_lines(
+    cache_path: Path = TRANSMISSION_LINES_CACHE,
+    extent: tuple[float, float, float, float] | None = None,
+) -> list[BaseGeometry]:
     if cache_path.exists():
         collection = json.loads(cache_path.read_text())
     else:
@@ -210,7 +216,7 @@ def load_transmission_lines(cache_path: Path = TRANSMISSION_LINES_CACHE) -> list
         temporary.replace(cache_path)
         log(f"Cached {len(collection['features'])} public BC transmission-line features at {cache_path}.")
 
-    west, east, south, north = model_config().extent
+    west, east, south, north = extent or model_config().extent
     extent_polygon = box(west, south, east, north)
     lines: list[BaseGeometry] = []
     for feature in collection.get("features", []):
@@ -234,6 +240,15 @@ def add_transmission_lines(ax: plt.Axes, lines: list[BaseGeometry]) -> None:
     if projected is None:
         projected = tuple(PLOT_CRS.project_geometry(line, DATA_CRS) for line in lines)
         _PROJECTED_TRANSMISSION_LINES[key] = projected
+    ax.add_geometries(
+        projected,
+        crs=PLOT_CRS,
+        facecolor="none",
+        edgecolor=TRANSMISSION_LINES_HALO_COLOR,
+        linewidth=TRANSMISSION_LINES_HALO_WIDTH,
+        alpha=TRANSMISSION_LINES_HALO_ALPHA,
+        zorder=7.9,
+    )
     ax.add_geometries(
         projected,
         crs=PLOT_CRS,

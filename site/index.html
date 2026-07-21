@@ -745,6 +745,7 @@
       const initialParams = new URLSearchParams(window.location.search);
       const requestedProductKey = initialParams.get("product");
       const requestedRunStamp = initialParams.get("run");
+      const requestedLatestRun = !requestedRunStamp || requestedRunStamp === "latest";
       if (initialParams.get("player") === "1") {
         document.body.classList.add("player-only");
       }
@@ -812,6 +813,7 @@
       let currentIndex = 0;
       let timer = null;
       let manifestVersion = "fallback";
+      let followLatestRun = requestedLatestRun;
 
       function padHour(hour) {
         return String(hour).padStart(3, "0");
@@ -990,6 +992,7 @@
         if (nextRunIndex < 0) {
           return;
         }
+        followLatestRun = true;
         activeRunIndex = nextRunIndex;
         activeRun = runs[nextRunIndex];
         runSelect.value = String(nextRunIndex);
@@ -1018,8 +1021,9 @@
         setFrame(0);
       }
 
-      function setRun(index) {
+      function setRun(index, preserveRunMode = false) {
         stopAnimation();
+        const latestRunIndexForSelectedProduct = runIndexWithProduct(activeProductKey);
         activeRunIndex = index;
         activeRun = runs[index] || runs[0] || fallbackRuns[0];
         runSelect.value = String(index);
@@ -1049,6 +1053,9 @@
             activeProductKey = fallbackProduct;
           }
         }
+        if (!preserveRunMode) {
+          followLatestRun = activeRunIndex === latestRunIndexForSelectedProduct;
+        }
         expandedPlotKey = groupForProduct(activeProductKey);
         expandedAreaKey = areaForProduct(activeProductKey);
         renderMenu();
@@ -1062,7 +1069,7 @@
         }
         const targetUrl = new URL(window.location.href);
         targetUrl.searchParams.set("product", activeProductKey);
-        targetUrl.searchParams.set("run", activeRun.stamp);
+        targetUrl.searchParams.set("run", followLatestRun ? "latest" : activeRun.stamp);
         window.history.replaceState({}, "", targetUrl);
       }
 
@@ -1127,6 +1134,7 @@
         targetUrl.search = "";
         targetUrl.searchParams.set("player", "1");
         targetUrl.searchParams.set("product", productKey);
+        targetUrl.searchParams.set("run", "latest");
         window.open(targetUrl.toString(), "_blank", "noopener");
       }
 
@@ -1285,23 +1293,22 @@
 
       async function loadRuns() {
         const manifest = await refreshRunManifest();
-        if (manifest && !requestedProductKey) {
-          activeProductKey = manifest.defaultProduct || activeProductKey;
+        const preferredProductKey = requestedProductKey || manifest?.defaultProduct || activeProductKey;
+        const latestProductRunIndex = runIndexWithProduct(preferredProductKey);
+        if (latestProductRunIndex >= 0) {
+          activeProductKey = preferredProductKey;
+          activeRunIndex = latestProductRunIndex;
         }
-        if (requestedProductKey) {
-          const requestedRunIndex = requestedRunStamp
-            ? runs.findIndex((run) => run.stamp === requestedRunStamp)
-            : -1;
-          const productRunIndex =
-            requestedRunIndex >= 0 && productFor(runs[requestedRunIndex], requestedProductKey)
-              ? requestedRunIndex
-              : runIndexWithProduct(requestedProductKey);
-          if (productRunIndex >= 0) {
-            activeRunIndex = productRunIndex;
-            activeProductKey = requestedProductKey;
+        if (!requestedLatestRun) {
+          const requestedRunIndex = runs.findIndex((run) => run.stamp === requestedRunStamp);
+          if (requestedRunIndex >= 0 && productFor(runs[requestedRunIndex], activeProductKey)) {
+            activeRunIndex = requestedRunIndex;
+            followLatestRun = false;
+          } else {
+            followLatestRun = true;
           }
         }
-        setRun(activeRunIndex);
+        setRun(activeRunIndex, true);
       }
 
       loadRuns();

@@ -156,7 +156,13 @@ It records these metrics in `logs/state/lpi_verification.status.json` and sends 
 
 ## Deferred Related Product
 
-Keep a separate future product for lightning near transmission corridors. It should buffer each named line/corridor, calculate observed and forecast lightning exposure within configurable distances, and report first/last strike time, density, and confidence. It should reuse the calibrated lightning layer but remain separate from the fire-start count model.
+Keep a separate future product for a daily Lightning Risk Outlook near named transmission corridors. Build it after the LPI-to-observed-lightning calibration so its Low/Medium/High ratings have measured probabilities rather than arbitrary raw-LPI cutoffs.
+
+- Buffer each named line or corridor using candidate distances such as 10, 20, and 30 km, then select the distance with the best out-of-sample relationship to observed corridor lightning.
+- Calculate the rating by day for each corridor and preserve segment-level detail. Use calibrated lightning-occurrence probabilities, high-percentile risk, and the fraction of corridor area above risk thresholds; do not rely on a simple spatial mean that can dilute a narrow but important convective cell.
+- Report the corridor rating, expected affected length or area, forecast timing, observed first/last strike time, flash density, and confidence.
+- Compare local-calendar-day and operational 12Z-12Z windows during calibration, then use one consistently in forecasts and verification.
+- Reuse the calibrated lightning layer and ECCC observation archive, but keep this product separate from the fire-start count model because corridor exposure and ignition occurrence answer different operational questions.
 
 ## Method References
 
