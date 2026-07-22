@@ -78,7 +78,7 @@ across every forecast hour. Install the hourly retrieval and R2 publisher with:
 scripts/launchd/install_fire_activity_overlay.sh
 ```
 
-The viewer checks the small live manifest every five minutes and displays its
+The viewer checks the small live manifest every hour and displays its
 overlay only for a product selected in `latest` mode. Unchanged PNGs are not
 uploaded again; the manifest observation time is refreshed every hour.
 

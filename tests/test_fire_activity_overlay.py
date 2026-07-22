@@ -112,7 +112,7 @@ class FireActivityOverlayTests(unittest.TestCase):
         self.assertIn('id="fireActivityOverlay"', html)
         self.assertIn("followLatestRun &&", html)
         self.assertIn("fireActivityManifest?.available", html)
-        self.assertIn("5 * 60 * 1000", html)
+        self.assertIn("60 * 60 * 1000", html)
 
 
 if __name__ == "__main__":
