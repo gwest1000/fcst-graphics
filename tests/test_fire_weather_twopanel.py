@@ -8,6 +8,7 @@ from unittest import mock
 import numpy as np
 
 import automate_hrdps_west as automation
+import fire_activity
 import make_hrdps_fire_weather_twopanel as twopanel
 import make_hrdps_west_lightning as lightning
 import publish_hrdps_west as publisher
@@ -145,6 +146,26 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         self.assertIn("dry lightning", right)
         self.assertNotEqual(left, left.upper())
         self.assertNotEqual(right, right.upper())
+
+    def test_active_fire_footer_is_compact_and_identifies_source(self):
+        activity = fire_activity.FireActivity(
+            source="bcws_active_fires",
+            retrieved_at=dt.datetime(2026, 7, 22, 15, tzinfo=dt.timezone.utc),
+            observations=(),
+        )
+        _, right = twopanel.edge_panel_footers(6, activity)
+
+        self.assertIn("Active fires", right)
+        self.assertNotIn("(flames)", right)
+        self.assertNotIn("satellite", right)
+        self.assertIn("BCWS 15Z", twopanel.fire_activity_source(activity))
+
+    def test_active_fire_marker_is_a_custom_flame_path(self):
+        self.assertIsInstance(twopanel.ACTIVE_FIRE_MARKER, twopanel.MatplotlibPath)
+        self.assertEqual(twopanel.ACTIVE_FIRE_COLOR, "#ff815c")
+        self.assertEqual(twopanel.ACTIVE_FIRE_OUTLINE_COLOR, "#111111")
+        self.assertLess(twopanel.ACTIVE_FIRE_AREA, 38.0)
+        self.assertGreater(twopanel.FIRE_OF_NOTE_AREA, 58.0)
 
     def test_projection_is_clockwise_and_projected_crop_is_portrait(self):
         self.assertEqual(twopanel.PLOT_CRS.proj4_params["lon_0"], -98.0)

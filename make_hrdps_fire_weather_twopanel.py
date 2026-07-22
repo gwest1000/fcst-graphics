@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import math
 import warnings
 from pathlib import Path
 
@@ -13,13 +14,16 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.colors as mcolors
+import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
 import cartopy.crs as ccrs
+from matplotlib.path import Path as MatplotlibPath
 from matplotlib.patches import Rectangle
 from shapely.geometry.base import BaseGeometry
 
 import fire_danger_peak
+import fire_activity
 import make_hrdps_west_convective as hrdps
 import make_hrdps_west_lightning as lightning
 import plot_style
@@ -105,6 +109,74 @@ PRECIP_DOT_MODERATE_COLOR = "#b8f1f2"
 PRECIP_DOT_MODERATE_EDGE_COLOR = "#007f86"
 PRECIP_DOT_HEAVY_COLOR = "#00a8ad"
 REGIONAL_PRECIP_DOT_AREA_MULTIPLIER = 1.25
+ACTIVE_FIRE_COLOR = "#ff815c"
+ACTIVE_FIRE_OUTLINE_COLOR = "#111111"
+ACTIVE_FIRE_AREA = 31.0
+FIRE_OF_NOTE_AREA = 70.0
+HOTSPOT_COLOR = "#f28e1c"
+HOTSPOT_MARKER = "s"
+
+
+# This is the Lucide Flame path used by wx_app, converted from its 24 px SVG
+# coordinates into a centered Matplotlib marker.
+ACTIVE_FIRE_MARKER = MatplotlibPath(
+    [
+        (0.0000, 1.0000),
+        (0.1053, 0.5789),
+        (0.4211, 0.3158),
+        (0.7368, 0.0526),
+        (0.7368, -0.2632),
+        (0.7368, -0.6701),
+        (0.4070, -1.0000),
+        (0.0000, -1.0000),
+        (-0.4070, -1.0000),
+        (-0.7368, -0.6701),
+        (-0.7368, -0.2632),
+        (-0.7368, -0.1490),
+        (-0.7001, -0.0387),
+        (-0.6316, 0.0526),
+        (-0.6316, -0.0927),
+        (-0.5138, -0.2105),
+        (-0.3684, -0.2105),
+        (-0.2231, -0.2105),
+        (-0.1053, -0.0927),
+        (-0.1053, 0.0526),
+        (-0.1053, 0.2632),
+        (-0.2632, 0.3684),
+        (-0.2632, 0.5789),
+        (-0.2632, 0.7895),
+        (0.0000, 1.0000),
+        (0.0000, 1.0000),
+    ],
+    [
+        MatplotlibPath.MOVETO,
+        MatplotlibPath.CURVE3,
+        MatplotlibPath.CURVE3,
+        MatplotlibPath.CURVE3,
+        MatplotlibPath.CURVE3,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE4,
+        MatplotlibPath.CURVE3,
+        MatplotlibPath.CURVE3,
+        MatplotlibPath.CLOSEPOLY,
+    ],
+)
 
 
 def add_panel_base(ax: plt.Axes) -> None:
@@ -250,11 +322,79 @@ def period_hazard_label(fhour: int) -> str:
     return "3-h max" if fhour > 0 else "Init-time"
 
 
-def edge_panel_footers(fhour: int) -> tuple[str, str]:
+def fire_activity_footer(activity: fire_activity.FireActivity | None) -> str:
+    if activity is None:
+        return ""
+    if activity.is_active_fire_feed:
+        return "Active fires"
+    return "24-h hotspots orange squares"
+
+
+def fire_activity_source(activity: fire_activity.FireActivity | None) -> str:
+    if activity is None:
+        return "ECCC HRDPS/CWFIS"
+    if activity.is_active_fire_feed:
+        cache_label = " CACHED" if activity.stale else ""
+        return f"ECCC HRDPS/CWFIS/BCWS {activity.retrieved_at:%H}Z{cache_label}"
+    return "ECCC HRDPS/CWFIS 24-H HOTSPOTS"
+
+
+def edge_panel_footers(
+    fhour: int,
+    activity: fire_activity.FireActivity | None = None,
+) -> tuple[str, str]:
     period = period_hazard_label(fhour)
+    fire_label = fire_activity_footer(activity)
+    fire_suffix = f" | {fire_label}" if fire_label else ""
     return (
         f"RH <30% brown / >60% blue | {period} gust | Transmission grey",
-        f"Danger VL/L/M/H/E | {period} LPI/dry lightning * | Rain 2.5/10 mm",
+        f"Danger | {period} LPI/dry lightning * | Rain 2.5/10{fire_suffix}",
+    )
+
+
+def add_fire_activity(
+    ax: plt.Axes,
+    activity: fire_activity.FireActivity | None,
+) -> None:
+    if activity is None or not activity.observations:
+        return
+    if activity.is_active_fire_feed:
+        regular = [observation for observation in activity.observations if not observation.fire_of_note]
+        notes = [observation for observation in activity.observations if observation.fire_of_note]
+        for observations, area in ((regular, ACTIVE_FIRE_AREA), (notes, FIRE_OF_NOTE_AREA)):
+            if not observations:
+                continue
+            points = ax.scatter(
+                [observation.longitude for observation in observations],
+                [observation.latitude for observation in observations],
+                marker=ACTIVE_FIRE_MARKER,
+                s=area,
+                facecolor=ACTIVE_FIRE_COLOR,
+                edgecolors=ACTIVE_FIRE_OUTLINE_COLOR,
+                linewidths=0.52,
+                transform=lightning.DATA_CRS,
+                zorder=36,
+            )
+        return
+
+    observations = activity.observations
+    sizes = [min(42.0, 10.0 + 2.8 * math.sqrt(observation.detection_count)) for observation in observations]
+    points = ax.scatter(
+        [observation.longitude for observation in observations],
+        [observation.latitude for observation in observations],
+        marker=HOTSPOT_MARKER,
+        s=sizes,
+        facecolor=HOTSPOT_COLOR,
+        edgecolors="white",
+        linewidths=0.75,
+        transform=lightning.DATA_CRS,
+        zorder=36,
+    )
+    points.set_path_effects(
+        [
+            path_effects.Stroke(linewidth=2.1, foreground="#6b3300"),
+            path_effects.Normal(),
+        ]
     )
 
 
@@ -495,6 +635,7 @@ def plot_twopanel(
     peak_danger_grid: fire_danger_peak.PeakDangerGrid | None = None,
     watersheds: list[BaseGeometry] | None = None,
     edge_bands: bool = True,
+    fire_observations: fire_activity.FireActivity | None = None,
 ) -> Path:
     """Render one frame from diagnostics already computed for the single panel."""
     yslice, xslice = hrdps.subset_slices(lat, lon, DATA_EXTENT)
@@ -548,6 +689,7 @@ def plot_twopanel(
     for ax in (rh_ax, lpi_ax):
         lightning.add_transmission_lines(ax, transmission_lines)
         hrdps.add_city_labels(ax, fontsize=6.5, marker_size=2.0, path_width=2.2, zorder=30)
+    add_fire_activity(lpi_ax, fire_observations)
 
     plot_style.add_internal_colorbar(
         fig,
@@ -575,12 +717,14 @@ def plot_twopanel(
 
     period = period_hazard_label(fhour)
     if edge_bands:
-        left_footer, right_footer = edge_panel_footers(fhour)
+        left_footer, right_footer = edge_panel_footers(fhour, fire_observations)
     else:
         left_footer = f"Valid-time RH: brown <30%, blue >60% | {period} gust vectors | Grey: BC transmission"
+        fire_suffix = fire_activity_footer(fire_observations)
         right_footer = (
             f"Danger VL/L/M/H/E | {period} LPI 20/40/60/80 | {period} dry lightning * | "
             "3-h rain dots: cyan 2.5/teal 10 mm | Transmission grey"
+            + (f" | {fire_suffix}" if fire_suffix else "")
         )
     add_panel_label(
         rh_ax,
@@ -602,7 +746,7 @@ def plot_twopanel(
             f"{hrdps.model_config().label} FIRE WEATHER  |  "
             f"{valid_local:%a %H:%M%Z %d%b%Y}  |  {valid:%H:%MUTC %d%b%Y}"
         ).upper(),
-        f"ECCC HRDPS/CWFIS | INIT {run.init_time:%Y%m%d%H}Z",
+        f"{fire_activity_source(fire_observations)} | INIT {run.init_time:%Y%m%d%H}Z",
         source_fontsize=6.4,
         edge_bands=edge_bands,
     )
@@ -629,6 +773,7 @@ def plot_regional_twopanel(
     region_label: str | None = None,
     extent: tuple[float, float, float, float] | None = None,
     edge_bands: bool = True,
+    fire_observations: fire_activity.FireActivity | None = None,
 ) -> Path:
     """Render the operational HRDPS-West regional two-panel fire-weather product."""
     if region_key not in REGIONAL_EXTENTS:
@@ -688,6 +833,7 @@ def plot_regional_twopanel(
     for ax in (rh_ax, danger_ax):
         lightning.add_transmission_lines(ax, transmission_lines)
         hrdps.add_city_labels(ax, fontsize=7.1, marker_size=2.2, path_width=2.35, zorder=30)
+    add_fire_activity(danger_ax, fire_observations)
 
     colorbar_layout = regional_colorbar_layout(region_key)
     plot_style.add_internal_colorbar(
@@ -715,12 +861,14 @@ def plot_regional_twopanel(
 
     period = period_hazard_label(fhour)
     if edge_bands:
-        left_footer, right_footer = edge_panel_footers(fhour)
+        left_footer, right_footer = edge_panel_footers(fhour, fire_observations)
     else:
         left_footer = f"Valid-time RH: brown <30%, blue >60% | {period} gust vectors | Grey: BC transmission"
+        fire_suffix = fire_activity_footer(fire_observations)
         right_footer = (
             f"Danger VL/L/M/H/E | {period} LPI 20/40/60/80 | {period} dry lightning * | "
             "3-h rain dots: cyan 2.5/teal 10 mm | Transmission grey"
+            + (f" | {fire_suffix}" if fire_suffix else "")
         )
     add_panel_label(
         rh_ax,
@@ -743,7 +891,7 @@ def plot_regional_twopanel(
             f"{hrdps.model_config().label} {region_label} FIRE WEATHER  |  "
             f"{valid_local:%a %H:%M%Z %d%b%Y}  |  {valid:%H:%MUTC %d%b%Y}"
         ).upper(),
-        f"ECCC HRDPS/CWFIS | INIT {run.init_time:%Y%m%d%H}Z",
+        f"{fire_activity_source(fire_observations)} | INIT {run.init_time:%Y%m%d%H}Z",
         source_fontsize=5.8,
         source_pad=0.06,
         edge_bands=edge_bands,

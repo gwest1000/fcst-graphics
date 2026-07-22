@@ -1,5 +1,6 @@
 {
   "defaultProduct": "continental_fourpanel",
+  "fireActivityManifestUrl": "https://pub-969ec1fc2e19465797efb65b276a58da.r2.dev/manifests/fire_activity.json",
   "manifestUrls": [
     "https://pub-969ec1fc2e19465797efb65b276a58da.r2.dev/manifests/continental.json",
     "https://pub-969ec1fc2e19465797efb65b276a58da.r2.dev/manifests/west.json",

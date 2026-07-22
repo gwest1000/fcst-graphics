@@ -11,6 +11,7 @@ examples/
 analysis/
 
 data/cwfis_fwi/
+data/fire_activity/
 data/fire_danger_bcws/
 data/fire_danger_verification/
 data/hrdps_continental/

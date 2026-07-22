@@ -68,8 +68,23 @@ The publisher token is intentionally limited to bucket object read/write. Bucket
 CORS and lifecycle configuration therefore requires a separate administrative
 credential if `configure_r2_bucket.py` must be rerun.
 
+## Live fire activity
+
+Fire-weather forecast fields are immutable base PNGs. Current BCWS incidents
+are rendered separately into four transparent, map-aligned overlays and reused
+across every forecast hour. Install the hourly retrieval and R2 publisher with:
+
+```bash
+scripts/launchd/install_fire_activity_overlay.sh
+```
+
+The viewer checks the small live manifest every five minutes and displays its
+overlay only for a product selected in `latest` mode. Unchanged PNGs are not
+uploaded again; the manifest observation time is refreshed every hour.
+
 ## Web viewer
 
-`site/config.json` lists the independently published model manifests. During
+`site/config.json` lists the independently published model manifests and the
+live fire-activity manifest. During
 migration it can point to the legacy combined manifest. In production it points
 to R2 URLs under `manifests/`.

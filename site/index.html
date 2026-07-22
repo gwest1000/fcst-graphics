@@ -378,6 +378,7 @@
       }
 
       .stage {
+        position: relative;
         min-height: 0;
         height: auto;
         overflow: hidden;
@@ -397,6 +398,23 @@
         min-height: 0;
         object-fit: contain;
         background: #fff;
+      }
+
+      .stage .fire-activity-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 2;
+        width: 100%;
+        max-width: 100%;
+        height: 100%;
+        max-height: 100%;
+        object-fit: contain;
+        background: transparent;
+        pointer-events: none;
+      }
+
+      .stage .fire-activity-overlay[hidden] {
+        display: none;
       }
 
       @media (max-width: 900px) {
@@ -620,6 +638,13 @@
               id="animationImage"
               alt="Forecast frame"
             />
+            <img
+              id="fireActivityOverlay"
+              class="fire-activity-overlay"
+              alt=""
+              aria-hidden="true"
+              hidden
+            />
           </div>
         </section>
       </main>
@@ -728,6 +753,7 @@
       const runSelect = document.querySelector("#runSelect");
       const runStatus = document.querySelector("#runStatus");
       const animationImage = document.querySelector("#animationImage");
+      const fireActivityOverlay = document.querySelector("#fireActivityOverlay");
       const sliderTicks = document.querySelector("#sliderTicks");
       const frameSlider = document.querySelector("#frameSlider");
       const playButton = document.querySelector("#playButton");
@@ -747,6 +773,8 @@
       let timer = null;
       let manifestVersion = "fallback";
       let followLatestRun = requestedLatestRun;
+      let fireActivityManifest = null;
+      let desiredFireOverlayUrl = "";
 
       function padHour(hour) {
         return String(hour).padStart(3, "0");
@@ -809,6 +837,62 @@
         const base = product.imageBase || `./images/${activeRun.stamp}/`;
         const assetVersion = product.assetVersion || activeRun.assetVersion || activeRun.stamp;
         return `${base}${filename}?v=${encodeURIComponent(`${manifestVersion}-${assetVersion}`)}`;
+      }
+
+      function renderFireActivityOverlay() {
+        const product = currentProduct();
+        const overlay = fireActivityManifest?.products?.[product?.key];
+        const canShow = Boolean(
+          followLatestRun &&
+          fireActivityManifest?.available &&
+          overlay?.image &&
+          overlay?.assetVersion &&
+          (!overlay.minimumRunStamp || activeRun.stamp >= overlay.minimumRunStamp)
+        );
+        if (!canShow) {
+          desiredFireOverlayUrl = "";
+          fireActivityOverlay.hidden = true;
+          fireActivityOverlay.removeAttribute("src");
+          fireActivityOverlay.removeAttribute("title");
+          return;
+        }
+        const url = new URL(overlay.image, window.location.href);
+        url.searchParams.set("v", overlay.assetVersion);
+        desiredFireOverlayUrl = url.href;
+        fireActivityOverlay.hidden = true;
+        fireActivityOverlay.title = `Current fire activity, updated ${fireActivityManifest.observationTime || "recently"}`;
+        if (fireActivityOverlay.src === desiredFireOverlayUrl && fireActivityOverlay.complete) {
+          fireActivityOverlay.hidden = false;
+        } else {
+          fireActivityOverlay.src = desiredFireOverlayUrl;
+        }
+      }
+
+      async function refreshFireActivityManifest(config) {
+        const url = config?.fireActivityManifestUrl;
+        if (!url) {
+          fireActivityManifest = null;
+          renderFireActivityOverlay();
+          return;
+        }
+        try {
+          const response = await fetch(`${url}${url.includes("?") ? "&" : "?"}v=${Date.now()}`, {
+            cache: "no-store",
+          });
+          if (!response.ok) {
+            throw new Error(`${url}: HTTP ${response.status}`);
+          }
+          const manifest = await response.json();
+          for (const overlay of Object.values(manifest.products || {})) {
+            if (overlay.image) {
+              overlay.image = new URL(overlay.image, response.url).href;
+            }
+          }
+          fireActivityManifest = manifest;
+          renderFireActivityOverlay();
+        } catch (error) {
+          console.warn("Fire-activity overlay manifest failed to load.", error);
+        }
       }
 
       function makeFrames(run, product) {
@@ -926,6 +1010,7 @@
         renderSliderTicks();
         preloadFrames();
         setFrame(0);
+        renderFireActivityOverlay();
       }
 
       function setRun(index, preserveRunMode = false) {
@@ -1095,6 +1180,15 @@
 
       speedSelect.addEventListener("change", restartAnimationIfPlaying);
 
+      fireActivityOverlay.addEventListener("load", () => {
+        if (fireActivityOverlay.src === desiredFireOverlayUrl) {
+          fireActivityOverlay.hidden = false;
+        }
+      });
+      fireActivityOverlay.addEventListener("error", () => {
+        fireActivityOverlay.hidden = true;
+      });
+
       runSelect.addEventListener("change", (event) => {
         setRun(Number(event.target.value));
       });
@@ -1124,6 +1218,7 @@
         try {
           const configResponse = await fetch(`./config.json?v=${Date.now()}`, { cache: "no-store" });
           const config = configResponse.ok ? await configResponse.json() : {};
+          void refreshFireActivityManifest(config);
           const manifestUrls = Array.isArray(config.manifestUrls) && config.manifestUrls.length
             ? config.manifestUrls
             : ["./runs.json"];
@@ -1212,6 +1307,15 @@
       }
 
       loadRuns();
+      window.setInterval(async () => {
+        try {
+          const response = await fetch(`./config.json?v=${Date.now()}`, { cache: "no-store" });
+          const config = response.ok ? await response.json() : {};
+          await refreshFireActivityManifest(config);
+        } catch (error) {
+          console.warn("Fire-activity overlay refresh failed.", error);
+        }
+      }, 5 * 60 * 1000);
     </script>
   </body>
 </html>
