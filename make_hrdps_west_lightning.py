@@ -1540,6 +1540,8 @@ def make_region_plots(
                         )
             peak_danger_grid = peak_danger_by_date[fire_date]
         for region in regions:
+            if render_bc_twopanel and region.key == "bc":
+                continue
             yslice, xslice = region_slices[region.key]
             region_fields = subset_lightning_fields(fields, yslice, xslice)
             out_path = plot_dir / f"{region_output_prefix(region)}_{run.stamp}_f{fhour:03d}.png"

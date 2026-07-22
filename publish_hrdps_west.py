@@ -17,7 +17,6 @@ from typing import Iterable
 
 from make_ensemble_control_fourpanel import FORECAST_HOURS as ENSEMBLE_CONTROL_FORECAST_HOURS
 from make_ensemble_control_fourpanel import GEFS_FORECAST_HOURS as GEFS_CONTROL_FORECAST_HOURS
-from make_hrdps_west_convective import FORECAST_HOURS as CONVECTIVE_FORECAST_HOURS
 from make_hrdps_west_convective import parse_stamp
 from make_hrdps_west_fourpanel import FORECAST_HOURS as FOURPANEL_FORECAST_HOURS
 from make_hrdps_west_lightning import FORECAST_HOURS as LIGHTNING_FORECAST_HOURS
@@ -26,17 +25,11 @@ from make_hrdps_evolved_danger_class import FORECAST_HOURS as FWI2025_DANGER_FOR
 DEFAULT_PAGES_REPO = Path("/Users/greg/projects/fcstpp-reports-pages")
 STAMP_RE = re.compile(r"^\d{8}T\d{2}Z$")
 CONTACT_SHEET_RE = re.compile(r".*_contact_sheet\.png$")
-TOP_LEVEL_IMAGE_RE = re.compile(r"^hrdps_west_(?:convective|fourpanel|lightning)_(\d{8}T\d{2}Z)_f\d{3}\.png$")
+TOP_LEVEL_IMAGE_RE = re.compile(r"^hrdps_west_(?:fourpanel|lightning)_(\d{8}T\d{2}Z)_f\d{3}\.png$")
 VERIFICATION_PRODUCT_KEYS = frozenset({"lightning_verif", "continental_lightning_verif", "fire_danger_verif"})
 VERIFICATION_KEEP_DAYS = 60
 MIN_MANIFEST_FRAME_FRACTION = 0.60
 PNGQUANT_QUALITY = "70-90"
-FIRE_WEATHER_DESCRIPTION = (
-    "Fire-weather ingredients: three-hour maximum all-cause gust colored vectors (regular HRDPS gust, ECCC-style "
-    "downslope adjustment, and triggered PCGE), experimental peak-daily BC fire-danger contours, 10 m RH hatching "
-    "(brown at 21-30%, dark brown at 20% or less, pale blue at 61-80%, and blue above 80%), "
-    "three-hour maximum LPI shading, and three-hour maximum dry-lightning asterisks."
-)
 FIRE_WEATHER_TWO_PANEL_DESCRIPTION = (
     "Two-panel fire weather: valid-time categorical 10 m RH and three-hour maximum colored all-cause gust vectors "
     "on the left; experimental peak-daily BC fire-danger categories, three-hour maximum LPI contours and "
@@ -72,32 +65,6 @@ PRODUCTS: dict[str, ProductConfig] = {
         description="500 hPa vorticity/height/250 hPa wind, IPW/LI/CAPE, 850-700 hPa RH/850 hPa temperature/850-or-700 hPa wind, and 3-hour precipitation/MSLP/10 m wind.",
         hours=FOURPANEL_FORECAST_HOURS,
         archive_subdir="fourpanel",
-        model_key="west",
-    ),
-    "convective": ProductConfig(
-        key="convective",
-        prefix="hrdps_west_convective",
-        label="Convective Gust Potential",
-        category="Surface",
-        plot_type="Convective Gust Potential",
-        area="BC",
-        model="HRDPS-West 1 km",
-        description="DCAPE shading, LI contours, storm-relative helicity contours, and PCGE hatching at 60 and 90 km/h.",
-        hours=CONVECTIVE_FORECAST_HOURS,
-        archive_subdir="",
-        model_key="west",
-    ),
-    "lightning": ProductConfig(
-        key="lightning",
-        prefix="hrdps_west_lightning",
-        label="Fire Weather",
-        category="Surface",
-        plot_type="Fire Weather",
-        area="BC",
-        model="HRDPS-West 1 km",
-        description=FIRE_WEATHER_DESCRIPTION,
-        hours=LIGHTNING_FORECAST_HOURS,
-        archive_subdir="lightning",
         model_key="west",
     ),
     "fwi2025_danger": ProductConfig(
@@ -191,32 +158,6 @@ PRODUCTS: dict[str, ProductConfig] = {
         archive_subdir="continental/fourpanel",
         model_key="continental",
     ),
-    "continental_convective": ProductConfig(
-        key="continental_convective",
-        prefix="hrdps_continental_convective",
-        label="Convective Gust Potential",
-        category="Surface",
-        plot_type="Convective Gust Potential",
-        area="BC",
-        model="HRDPS 2.5 km",
-        description="DCAPE shading, LI contours, storm-relative helicity contours, and PCGE hatching at 60 and 90 km/h.",
-        hours=CONVECTIVE_FORECAST_HOURS,
-        archive_subdir="continental",
-        model_key="continental",
-    ),
-    "continental_lightning": ProductConfig(
-        key="continental_lightning",
-        prefix="hrdps_continental_lightning",
-        label="Fire Weather 1-panel",
-        category="Surface",
-        plot_type="Fire Weather 1-panel",
-        area="BC",
-        model="HRDPS 2.5 km",
-        description=FIRE_WEATHER_DESCRIPTION,
-        hours=LIGHTNING_FORECAST_HOURS,
-        archive_subdir="continental/lightning",
-        model_key="continental",
-    ),
     "continental_lightning_twopanel": ProductConfig(
         key="continental_lightning_twopanel",
         prefix="hrdps_continental_lightning_twopanel",
@@ -285,11 +226,9 @@ PRODUCTS: dict[str, ProductConfig] = {
 }
 
 PRODUCTS_BY_MODEL = {
-    "west": ("convective", "lightning_sw", "lightning_se", "lightning_ne", "fwi2025_danger"),
+    "west": ("lightning_sw", "lightning_se", "lightning_ne", "fwi2025_danger"),
     "continental": (
         "continental_fourpanel",
-        "continental_convective",
-        "continental_lightning",
         "continental_lightning_twopanel",
         "continental_fwi2025_danger",
     ),
@@ -360,7 +299,7 @@ def optimize_png_for_pages(path: Path) -> None:
         tmp_path.unlink(missing_ok=True)
 
 
-def expected_images(stamp: str, product_key: str = "convective") -> list[str]:
+def expected_images(stamp: str, product_key: str = "continental_fourpanel") -> list[str]:
     product = PRODUCTS[product_key]
     return [f"{product.prefix}_{stamp}_f{fhour:03d}.png" for fhour in product.hours]
 
@@ -388,12 +327,8 @@ def default_plot_dir_for_product(product_key: str, model: str) -> Path:
         return Path("plots/hrdps_west_lightning")
     if product_key.endswith("fwi2025_danger"):
         return Path("plots/experimental_fwi2025_danger")
-    if product_key == "continental_convective":
-        return Path("plots/hrdps_continental")
     if product_key == "continental_fourpanel":
         return Path("plots/hrdps_continental_fourpanel")
-    if product_key == "convective":
-        return Path("plots/hrdps_west")
     if product_key == "fourpanel":
         return Path("plots/hrdps_west_fourpanel")
     if product_key == "ecmwf_control_fourpanel":
@@ -573,7 +508,7 @@ def run_record(stamp: str, pages_dir: Path) -> dict[str, object]:
             products[key] = record
     if not products:
         raise RuntimeError(f"Archived run {stamp} has no complete product sets in {pages_dir}.")
-    default = products.get("continental_convective") or products.get("convective") or next(iter(products.values()))
+    default = products.get("continental_fourpanel") or next(iter(products.values()))
     return {
         "stamp": stamp,
         "init": init.isoformat().replace("+00:00", "Z"),

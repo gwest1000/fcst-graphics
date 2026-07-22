@@ -42,15 +42,12 @@ KEYCHAIN_SECRET_KEY_SERVICE = "fcstGraphics-r2-secret-access-key"
 MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
     "continental": (
         "continental_fourpanel",
-        "continental_convective",
-        "continental_lightning",
         "continental_lightning_twopanel",
         "continental_fwi2025_danger",
         "continental_lightning_verif",
         "fire_danger_verif",
     ),
     "west": (
-        "convective",
         "lightning_sw",
         "lightning_se",
         "lightning_ne",
@@ -63,10 +60,16 @@ MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
 
 DEFAULT_PRODUCTS = {
     "continental": "continental_fourpanel",
-    "west": "convective",
+    "west": "lightning_sw",
     "gefs_control": "gefs_control_fourpanel",
     "ecmwf_control": "ecmwf_control_fourpanel",
 }
+
+RETIRED_PRODUCTS: dict[str, tuple[str, ...]] = {
+    "continental": ("continental_convective", "continental_lightning"),
+    "west": ("convective",),
+}
+RETIRED_PRODUCTS_VERSION = "2026-07-21-v1"
 
 
 class R2ConfigurationError(RuntimeError):
@@ -180,6 +183,18 @@ class PublishState:
     def close(self) -> None:
         self.connection.close()
 
+    def metadata(self, key: str) -> str | None:
+        row = self.connection.execute("SELECT value FROM metadata WHERE key = ?", (key,)).fetchone()
+        return None if row is None else str(row[0])
+
+    def set_metadata(self, key: str, value: str) -> None:
+        self.connection.execute(
+            "INSERT INTO metadata(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (key, value),
+        )
+        self.connection.commit()
+
     def unchanged(self, frame: LocalFrame) -> bool:
         row = self.connection.execute(
             "SELECT size_bytes, mtime_ns, format_version FROM artifacts WHERE object_key = ?",
@@ -251,6 +266,23 @@ class PublishState:
             self.connection.executemany("DELETE FROM artifacts WHERE object_key = ?", ((key,) for key in expired))
             self.connection.commit()
         return len(expired)
+
+    def prune_inactive_products(self, model: str, active_products: Iterable[str]) -> int:
+        active = tuple(active_products)
+        rows = self.connection.execute(
+            "SELECT object_key, product_key FROM artifacts WHERE model = ?", (model,)
+        ).fetchall()
+        stale = [
+            str(row["object_key"])
+            for row in rows
+            if str(row["product_key"]) not in active
+        ]
+        if stale:
+            self.connection.executemany(
+                "DELETE FROM artifacts WHERE object_key = ?", ((key,) for key in stale)
+            )
+            self.connection.commit()
+        return len(stale)
 
 
 def retention_days(product_key: str) -> int:
@@ -418,6 +450,36 @@ def upload_frame(client, config: R2Config, frame: LocalFrame, body_path: Path, s
     retry(put, f"Upload {frame.object_key}")
 
 
+def purge_retired_objects(client, config: R2Config, model: str) -> int:
+    deleted = 0
+    for product_key in RETIRED_PRODUCTS.get(model, ()):
+        prefix = f"models/{model}/forecast/{product_key}/"
+        continuation_token: str | None = None
+        while True:
+            request: dict[str, object] = {"Bucket": config.bucket, "Prefix": prefix}
+            if continuation_token:
+                request["ContinuationToken"] = continuation_token
+            response = retry(
+                lambda request=request: client.list_objects_v2(**request),
+                f"List retired prefix {prefix}",
+            )
+            keys = [str(item["Key"]) for item in response.get("Contents", ())]
+            for offset in range(0, len(keys), 1000):
+                batch = keys[offset : offset + 1000]
+                retry(
+                    lambda batch=batch: client.delete_objects(
+                        Bucket=config.bucket,
+                        Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True},
+                    ),
+                    f"Delete retired prefix {prefix}",
+                )
+                deleted += len(batch)
+            if not response.get("IsTruncated"):
+                break
+            continuation_token = str(response["NextContinuationToken"])
+    return deleted
+
+
 def optimize_and_upload(client, config: R2Config, frame: LocalFrame) -> tuple[LocalFrame, str]:
     with optimized_png(frame.path) as upload_path:
         sha256 = sha256_file(upload_path)
@@ -442,7 +504,10 @@ def build_manifest(
     generated = generated or dt.datetime.now(dt.timezone.utc)
     grouped: dict[tuple[str, str], list[sqlite3.Row]] = {}
     for row in rows:
-        grouped.setdefault((str(row["stamp"]), str(row["product_key"])), []).append(row)
+        product_key = str(row["product_key"])
+        if product_key not in MODEL_PRODUCTS[model] or product_key not in PRODUCTS:
+            continue
+        grouped.setdefault((str(row["stamp"]), product_key), []).append(row)
 
     runs: dict[str, dict[str, object]] = {}
     for (stamp, product_key), product_rows in grouped.items():
@@ -529,6 +594,12 @@ def publish_model(
         storage_scope=f"{config.account_id}/{config.bucket}",
     )
     try:
+        retirement_key = f"retired_products:{model}"
+        retired_deleted = 0
+        if state.metadata(retirement_key) != RETIRED_PRODUCTS_VERSION:
+            retired_deleted = purge_retired_objects(client, config, model)
+            state.set_metadata(retirement_key, RETIRED_PRODUCTS_VERSION)
+        inactive_pruned = state.prune_inactive_products(model, MODEL_PRODUCTS[model])
         stamps = candidate_stamps(model, sync_retained, stamp)
         frames = discover_frames(
             model,
@@ -562,7 +633,7 @@ def publish_model(
         manifest_url = upload_manifest(client, config, model, manifest)
         print(
             f"R2 {model}: uploaded={uploaded}, unchanged={skipped}, incomplete={incomplete}, "
-            f"state_pruned={pruned}, "
+            f"state_pruned={pruned}, inactive_pruned={inactive_pruned}, retired_deleted={retired_deleted}, "
             f"runs={len(manifest['runs'])}, manifest={manifest_url}",
             flush=True,
         )
@@ -572,6 +643,8 @@ def publish_model(
             "unchanged": skipped,
             "incomplete": incomplete,
             "state_pruned": pruned,
+            "inactive_pruned": inactive_pruned,
+            "retired_deleted": retired_deleted,
             "manifest_url": manifest_url,
             "runs": len(manifest["runs"]),
         }

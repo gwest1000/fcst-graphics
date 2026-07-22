@@ -10,17 +10,19 @@ from unittest import mock
 from r2_publish import (
     PNG_END_MARKER,
     PublishState,
+    R2Config,
     build_manifest,
     discover_frames,
     is_complete_png,
     object_key_for,
+    purge_retired_objects,
 )
 from publish_hrdps_west import PRODUCTS, image_name_for_hour
 
 
 class R2PublishTests(unittest.TestCase):
     def test_object_keys_separate_retention_classes(self):
-        forecast = object_key_for("west", "convective", "20260720T12Z", "frame.png")
+        forecast = object_key_for("west", "lightning_sw", "20260720T12Z", "frame.png")
         verification = object_key_for("west", "lightning_verif", "20260720T12Z", "frame.png")
         self.assertIn("/forecast/", forecast)
         self.assertIn("/verification/", verification)
@@ -55,7 +57,7 @@ class R2PublishTests(unittest.TestCase):
                     size_bytes, mtime_ns, sha256, format_version, uploaded_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
-                ("key", "west", "convective", "20260720T12Z", 0, "x", 1, 1, "hash", "v", "now"),
+                ("key", "west", "lightning_sw", "20260720T12Z", 0, "x", 1, 1, "hash", "v", "now"),
             )
             first.connection.commit()
             first.close()
@@ -75,12 +77,73 @@ class R2PublishTests(unittest.TestCase):
             path.write_bytes(b"png-payload" + PNG_END_MARKER)
             self.assertTrue(is_complete_png(path))
 
+    def test_retired_products_are_removed_from_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = PublishState(Path(tmp) / "state.sqlite3")
+            try:
+                for object_key, product_key in (("active", "lightning_sw"), ("old", "convective")):
+                    state.connection.execute(
+                        """
+                        INSERT INTO artifacts (
+                            object_key, model, product_key, stamp, forecast_hour, source_path,
+                            size_bytes, mtime_ns, sha256, format_version, uploaded_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            object_key,
+                            "west",
+                            product_key,
+                            "20260720T12Z",
+                            0,
+                            "x",
+                            1,
+                            1,
+                            "hash",
+                            "v",
+                            "now",
+                        ),
+                    )
+                state.connection.commit()
+                removed = state.prune_inactive_products("west", ("lightning_sw",))
+                products = {
+                    row[0]
+                    for row in state.connection.execute(
+                        "SELECT product_key FROM artifacts WHERE model = 'west'"
+                    )
+                }
+            finally:
+                state.close()
+        self.assertEqual(removed, 1)
+        self.assertEqual(products, {"lightning_sw"})
+
+    def test_retired_r2_prefixes_are_deleted(self):
+        client = mock.Mock()
+        client.list_objects_v2.return_value = {
+            "Contents": [{"Key": "models/west/forecast/convective/old.png"}],
+            "IsTruncated": False,
+        }
+        config = R2Config("account", "access", "secret", "bucket", "https://assets.example.com")
+
+        deleted = purge_retired_objects(client, config, "west")
+
+        self.assertEqual(deleted, 1)
+        client.list_objects_v2.assert_called_once_with(
+            Bucket="bucket", Prefix="models/west/forecast/convective/"
+        )
+        client.delete_objects.assert_called_once_with(
+            Bucket="bucket",
+            Delete={
+                "Objects": [{"Key": "models/west/forecast/convective/old.png"}],
+                "Quiet": True,
+            },
+        )
+
     def test_retained_sync_filters_each_product_independently(self):
         now = dt.datetime(2026, 7, 20, 12, tzinfo=dt.timezone.utc)
         stamp = "20260710T12Z"
         with tempfile.TemporaryDirectory() as tmp:
             roots = {
-                "convective": Path(tmp) / "forecast",
+                "lightning_sw": Path(tmp) / "forecast",
                 "lightning_verif": Path(tmp) / "verification",
             }
             for key, root in roots.items():

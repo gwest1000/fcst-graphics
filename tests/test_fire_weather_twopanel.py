@@ -1,10 +1,15 @@
+import datetime as dt
 import inspect
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
+
+import numpy as np
 
 import automate_hrdps_west as automation
 import make_hrdps_fire_weather_twopanel as twopanel
+import make_hrdps_west_lightning as lightning
 import publish_hrdps_west as publisher
 
 
@@ -25,6 +30,10 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
 
     def test_product_is_operational_for_continental_and_west_regions(self):
         self.assertIn("continental_lightning_twopanel", publisher.PRODUCTS_BY_MODEL["continental"])
+        self.assertNotIn("continental_lightning", publisher.PRODUCTS)
+        self.assertNotIn("continental_convective", publisher.PRODUCTS)
+        self.assertNotIn("convective", publisher.PRODUCTS)
+        self.assertNotIn("lightning", publisher.PRODUCTS)
         self.assertEqual(
             set(automation.lightning_product_keys("west")),
             {"lightning_sw", "lightning_se", "lightning_ne"},
@@ -36,11 +45,52 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         product = publisher.PRODUCTS["continental_lightning_twopanel"]
         self.assertEqual(product.prefix, twopanel.OUTPUT_PREFIX)
         self.assertEqual(product.label, "Fire Weather")
-        self.assertEqual(publisher.PRODUCTS["continental_lightning"].label, "Fire Weather 1-panel")
         self.assertIn(
             "continental_lightning_twopanel",
             automation.lightning_product_keys("continental"),
         )
+
+    def test_continental_render_skips_retired_one_panel(self):
+        run = lightning.RunInfo(
+            cycle="12",
+            stamp="20260720T12Z",
+            init_time=dt.datetime(2026, 7, 20, 12, tzinfo=dt.timezone.utc),
+        )
+        lat, lon = np.meshgrid(
+            np.linspace(48.0, 59.0, 4, dtype=np.float32),
+            np.linspace(-139.0, -114.0, 5, dtype=np.float32),
+            indexing="ij",
+        )
+        fields = mock.Mock()
+        with TemporaryDirectory() as tmpdir:
+            lightning.set_model("continental")
+            try:
+                with (
+                    mock.patch.object(lightning, "load_transmission_lines", return_value=[]),
+                    mock.patch.object(lightning, "read_grib", side_effect=[(None, lat, lon), (np.zeros_like(lat), None, None)]),
+                    mock.patch.object(lightning, "subset_slices", return_value=(slice(None), slice(None))),
+                    mock.patch.object(lightning, "compute_lightning_fields", return_value=fields),
+                    mock.patch.object(lightning, "save_lpi_cache", return_value=Path(tmpdir) / "lpi.npz"),
+                    mock.patch.object(lightning, "plot_lightning") as legacy_plot,
+                    mock.patch.object(twopanel, "plot_twopanel") as two_panel_plot,
+                ):
+                    paths = lightning.make_region_plots(
+                        run,
+                        Path(tmpdir) / "data",
+                        Path(tmpdir) / "plots",
+                        2,
+                        4,
+                        6,
+                        hours=(0,),
+                        no_fwi=True,
+                        region_keys=("bc",),
+                    )
+            finally:
+                lightning.set_model("west")
+
+        legacy_plot.assert_not_called()
+        two_panel_plot.assert_called_once()
+        self.assertEqual(len(paths), 1)
 
     def test_two_panel_vectors_are_fifty_percent_denser_than_previous_layout(self):
         self.assertEqual(twopanel.VECTOR_DENSITY_MULTIPLIER, 1.875)

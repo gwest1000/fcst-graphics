@@ -516,20 +516,6 @@
           </li>
           <li class="category">
             <div class="category-title">Surface</div>
-            <button class="menu-button ptype" type="button" data-plot-toggle="convective">
-              <span class="chevron" aria-hidden="true"></span>
-              <span class="label">Convective Gust Potential</span>
-            </button>
-            <div class="submenu" data-plot-panel="convective">
-              <button class="menu-button area" type="button" data-area-toggle="convective">
-                <span class="chevron" aria-hidden="true"></span>
-                <span class="label">BC</span>
-              </button>
-              <div class="submenu" data-model-panel="convective">
-                <button class="menu-button model" type="button" data-product-select="convective">HRDPS-West 1 km</button>
-                <button class="menu-button model" type="button" data-product-select="continental_convective">HRDPS 2.5 km</button>
-              </div>
-            </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="lightning">
               <span class="chevron" aria-hidden="true"></span>
               <span class="label">Fire Weather</span>
@@ -562,19 +548,6 @@
               </button>
               <div class="submenu" data-model-panel="lightning_ne">
                 <button class="menu-button model" type="button" data-product-select="lightning_ne">HRDPS-West 1 km</button>
-              </div>
-            </div>
-            <button class="menu-button ptype" type="button" data-plot-toggle="lightning_onepanel">
-              <span class="chevron" aria-hidden="true"></span>
-              <span class="label">Fire Weather 1-panel</span>
-            </button>
-            <div class="submenu" data-plot-panel="lightning_onepanel">
-              <button class="menu-button area" type="button" data-area-toggle="lightning_onepanel">
-                <span class="chevron" aria-hidden="true"></span>
-                <span class="label">BC</span>
-              </button>
-              <div class="submenu" data-model-panel="lightning_onepanel">
-                <button class="menu-button model" type="button" data-product-select="continental_lightning">HRDPS 2.5 km</button>
               </div>
             </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="fwi2025_danger">
@@ -661,19 +634,6 @@
           assetVersion: "fallback",
           imageBase: "./images/20260630T06Z/continental/",
           products: {
-            continental_convective: {
-              key: "continental_convective",
-              label: "Convective Gust Potential",
-              category: "Surface",
-              plotType: "Convective Gust Potential",
-              area: "BC",
-              model: "HRDPS 2.5 km",
-              modelKey: "continental",
-              hours: Array.from({ length: 17 }, (_, index) => index * 3),
-              imageBase: "./images/20260630T06Z/continental/",
-              filePrefix: "hrdps_continental_convective_20260630T06Z",
-              assetVersion: "fallback",
-            },
             continental_fourpanel: {
               key: "continental_fourpanel",
               label: "Convective 4-Panel",
@@ -685,27 +645,6 @@
               hours: Array.from({ length: 17 }, (_, index) => index * 3),
               imageBase: "./images/20260630T06Z/continental/fourpanel/",
               filePrefix: "hrdps_continental_fourpanel_20260630T06Z",
-              assetVersion: "fallback",
-            },
-          },
-        },
-        {
-          stamp: "20260629T12Z",
-          init: "2026-06-29T12:00:00Z",
-          label: "2026-06-29 12Z",
-          assetVersion: "fallback",
-          imageBase: "./images/20260629T12Z/",
-          products: {
-            convective: {
-              key: "convective",
-              label: "Convective Gust Potential",
-              category: "Surface",
-              plotType: "Convective Gust Potential",
-              area: "BC",
-              model: "HRDPS-West 1 km",
-              hours: Array.from({ length: 17 }, (_, index) => index * 3),
-              imageBase: "./images/20260629T12Z/",
-              filePrefix: "hrdps_west_convective_20260629T12Z",
               assetVersion: "fallback",
             },
           },
@@ -753,14 +692,12 @@
       const plotGroups = {
         fourpanel: ["continental_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
-        convective: ["convective", "continental_convective"],
         lightning: [
           "continental_lightning_twopanel",
           "lightning_sw",
           "lightning_se",
           "lightning_ne",
         ],
-        lightning_onepanel: ["continental_lightning"],
         fwi2025_danger: ["fwi2025_danger", "continental_fwi2025_danger"],
         lightning_verif: ["lightning_verif", "continental_lightning_verif"],
         fire_danger_verif: ["fire_danger_verif"],
@@ -768,12 +705,10 @@
       const areaGroups = {
         fourpanel: ["continental_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
-        convective: ["convective", "continental_convective"],
         lightning_bc: ["continental_lightning_twopanel"],
         lightning_sw: ["lightning_sw"],
         lightning_se: ["lightning_se"],
         lightning_ne: ["lightning_ne"],
-        lightning_onepanel: ["continental_lightning"],
         fwi2025_danger: ["fwi2025_danger", "continental_fwi2025_danger"],
         lightning_verif: ["lightning_verif", "continental_lightning_verif"],
         fire_danger_verif: ["fire_danger_verif"],
@@ -781,12 +716,10 @@
       const areaPlotGroups = {
         fourpanel: "fourpanel",
         synoptic_fourpanel: "synoptic_fourpanel",
-        convective: "convective",
         lightning_bc: "lightning",
         lightning_sw: "lightning",
         lightning_se: "lightning",
         lightning_ne: "lightning",
-        lightning_onepanel: "lightning_onepanel",
         fwi2025_danger: "fwi2025_danger",
         lightning_verif: "lightning_verif",
         fire_danger_verif: "fire_danger_verif",
@@ -824,27 +757,8 @@
         return run.label || `${run.stamp} (${runOptionFormatter.format(date)})`;
       }
 
-      function legacyProduct(run) {
-        const hours = Array.from({ length: 17 }, (_, index) => index * 3);
-        return {
-          key: "convective",
-          label: "Convective Gust Potential",
-          category: "Surface",
-          plotType: "Convective Gust Potential",
-          area: "BC",
-          model: "HRDPS-West 1 km",
-          hours,
-          imageBase: run.imageBase || `./images/${run.stamp}/`,
-          filePrefix: `hrdps_west_convective_${run.stamp}`,
-          assetVersion: run.assetVersion || run.stamp,
-        };
-      }
-
       function productFor(run, key) {
-        if (run.products && run.products[key]) {
-          return run.products[key];
-        }
-        return !run.products && key === "convective" ? legacyProduct(run) : null;
+        return run.products?.[key] || null;
       }
 
       function groupForProduct(productKey) {
@@ -853,7 +767,7 @@
             return groupKey;
           }
         }
-        return "convective";
+        return "fourpanel";
       }
 
       function areaForProduct(productKey) {
@@ -876,16 +790,9 @@
       function currentProduct() {
         return (
           productFor(activeRun, activeProductKey) ||
-          productFor(activeRun, "continental_convective") ||
-          productFor(activeRun, "convective") ||
           productFor(activeRun, "continental_lightning_twopanel") ||
-          productFor(activeRun, "continental_lightning") ||
-          productFor(activeRun, "lightning") ||
-          productFor(activeRun, "continental_lightning_sw") ||
           productFor(activeRun, "lightning_sw") ||
-          productFor(activeRun, "continental_lightning_se") ||
           productFor(activeRun, "lightning_se") ||
-          productFor(activeRun, "continental_lightning_ne") ||
           productFor(activeRun, "lightning_ne") ||
           productFor(activeRun, "fwi2025_danger") ||
           productFor(activeRun, "continental_fwi2025_danger") ||
@@ -1029,16 +936,9 @@
         runSelect.value = String(index);
         if (!productFor(activeRun, activeProductKey)) {
           const fallbackProduct = [
-            "continental_convective",
-            "convective",
             "continental_lightning_twopanel",
-            "continental_lightning",
-            "lightning",
-            "continental_lightning_sw",
             "lightning_sw",
-            "continental_lightning_se",
             "lightning_se",
-            "continental_lightning_ne",
             "lightning_ne",
             "fwi2025_danger",
             "continental_fwi2025_danger",
