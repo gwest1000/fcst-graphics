@@ -22,6 +22,7 @@ import make_hrdps_evolved_danger_class as danger
 import fire_danger_peak
 import make_hrdps_west_fourpanel as fourpanel
 import make_hrdps_west_lightning as lightning
+import make_hrdps_temperature as temperature
 import lightning_ml_archive as ml_archive
 from publish_hrdps_west import (
     DEFAULT_PAGES_REPO,
@@ -49,6 +50,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=None, help="Convective output directory.")
     parser.add_argument("--fourpanel-output-dir", type=Path, default=None)
     parser.add_argument("--lightning-output-dir", type=Path, default=None)
+    parser.add_argument("--temperature-output-dir", type=Path, default=None)
     parser.add_argument("--danger-output-dir", type=Path, default=None)
     parser.add_argument("--pages-repo", type=Path, default=DEFAULT_PAGES_REPO)
     parser.add_argument("--ml-archive-root", type=Path, default=ml_archive.DEFAULT_ARCHIVE_ROOT)
@@ -59,6 +61,8 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--lightning-shade-stride", type=int, default=None)
     parser.add_argument("--lightning-contour-stride", type=int, default=None)
     parser.add_argument("--lightning-dcape-stride", type=int, default=None)
+    parser.add_argument("--temperature-shade-stride", type=int, default=None)
+    parser.add_argument("--temperature-contour-stride", type=int, default=None)
     parser.add_argument("--workers", type=int, default=10)
     parser.add_argument("--keep-days", type=int, default=7)
     parser.add_argument("--wait-minutes", type=int, default=600)
@@ -261,6 +265,37 @@ def existing_product_family_hours(output_dir: Path, stamp: str, product_keys: It
     return set.intersection(*hour_sets)
 
 
+def missing_hourly_lpi_plot_hours(
+    archive_root: Path | None,
+    run: convective.RunInfo,
+    plot_hours: Iterable[int],
+) -> set[int]:
+    if archive_root is None:
+        return set()
+    missing: set[int] = set()
+    for fhour in plot_hours:
+        for snapshot_hour in lightning.diagnostic_window_hours(int(fhour)):
+            path = ml_archive.hourly_lpi_hour_archive_path(archive_root, run.stamp, snapshot_hour)
+            if not path.exists() or not path.with_suffix(".json").exists():
+                missing.add(int(fhour))
+                break
+    return missing
+
+
+def missing_baseline_lpi_hours(
+    archive_root: Path | None,
+    run: convective.RunInfo,
+    plot_hours: Iterable[int],
+) -> set[int]:
+    if archive_root is None:
+        return set()
+    return {
+        int(fhour)
+        for fhour in plot_hours
+        if not ml_archive.baseline_hour_archive_path(archive_root, run.stamp, int(fhour)).exists()
+    }
+
+
 def full_product_hours_published(pages_repo: Path, stamp: str, product_key: str) -> set[int]:
     run_dir = pages_repo / "hrdps-west" / "images" / stamp
     archive_dir = archive_dir_for_product(run_dir, product_key)
@@ -280,6 +315,10 @@ def full_product_family_hours_published(pages_repo: Path, stamp: str, product_ke
 
 def lightning_product_keys(model: str) -> tuple[str, ...]:
     return tuple(key for key in PRODUCTS_BY_MODEL[model] if "lightning" in key and "verif" not in key)
+
+
+def temperature_product_keys(model: str) -> tuple[str, ...]:
+    return tuple(key for key in PRODUCTS_BY_MODEL[model] if "temperature" in key)
 
 
 def fire_weather_region_keys(model: str) -> tuple[str, ...]:
@@ -340,10 +379,13 @@ def cleanup_model_data(
     for child in data_dir.iterdir():
         if child.is_dir() and child.name != keep_stamp:
             cycle = child.name[9:11] if len(child.name) >= 11 else ""
-            if ml_archive.should_archive_model_run(convective.model_config().key, cycle) and not ml_archive.run_archive_complete(
-                archive_root, child.name
+            if not ml_archive.required_run_archives_complete(
+                archive_root,
+                convective.model_config().key,
+                cycle,
+                child.name,
             ):
-                convective.log(f"Preserving unarchived HRDPS training run: {child}")
+                convective.log(f"Preserving HRDPS run with incomplete development archives: {child}")
                 continue
             convective.log(f"Removing old model data: {child}")
             shutil.rmtree(child)
@@ -380,7 +422,7 @@ def archive_lpi_baselines(
     hours: Iterable[int],
 ) -> bool:
     hours = tuple(sorted(set(int(hour) for hour in hours)))
-    if not hours or not ml_archive.should_archive_model_run(args.model, run.cycle):
+    if not hours or not ml_archive.should_archive_hourly_lpi_run(args.model, run.cycle):
         return True
     preflight_error = getattr(args, "ml_archive_preflight_error", None)
     if preflight_error:
@@ -395,6 +437,14 @@ def archive_lpi_baselines(
         args.ml_archive_preflight_error = str(exc)
         convective.log(f"Handmade-LPI baseline archive failed: {exc}")
         return False
+
+
+def hourly_archive_root_for_run(args: argparse.Namespace, run: convective.RunInfo) -> Path | None:
+    if getattr(args, "ml_archive_preflight_error", None):
+        return None
+    if not ml_archive.should_archive_hourly_lpi_run(args.model, run.cycle):
+        return None
+    return args.ml_archive_root
 
 
 def cleanup_local_plots(output_dir: Path, keep_days: int) -> None:
@@ -573,6 +623,7 @@ def render_lightning_worker(
     contour_stride: int,
     dcape_stride: int,
     hours: tuple[int, ...],
+    hourly_archive_root: Path | None,
 ) -> int:
     convective.set_model(model)
     lightning.set_model(model)
@@ -586,6 +637,30 @@ def render_lightning_worker(
             dcape_stride,
             hours,
             region_keys=fire_weather_region_keys(model),
+            hourly_archive_root=hourly_archive_root,
+        )
+    )
+
+
+def render_temperature_worker(
+    model: str,
+    run: convective.RunInfo,
+    data_dir: Path,
+    output_dir: Path,
+    shade_stride: int,
+    contour_stride: int,
+    hours: tuple[int, ...],
+) -> int:
+    temperature.set_model(model)
+    return len(
+        temperature.make_plots(
+            run,
+            data_dir,
+            output_dir,
+            hours,
+            region_keys=temperature.region_keys_for_model(model),
+            shade_stride=shade_stride,
+            contour_stride=contour_stride,
         )
     )
 
@@ -618,6 +693,7 @@ def render_products(
     data_dir: Path,
     fourpanel_output_dir: Path,
     lightning_output_dir: Path,
+    temperature_output_dir: Path,
     danger_output_dir: Path,
     shade_stride: int,
     contour_stride: int,
@@ -625,19 +701,27 @@ def render_products(
     lightning_shade_stride: int,
     lightning_contour_stride: int,
     lightning_dcape_stride: int,
+    temperature_shade_stride: int,
+    temperature_contour_stride: int,
     fourpanel_hours: Iterable[int],
     lightning_hours: Iterable[int],
+    temperature_hours: Iterable[int],
     danger_hours: Iterable[int],
 ) -> None:
     fourpanel_hours = tuple(sorted(set(int(hour) for hour in fourpanel_hours)))
     lightning_hours = tuple(sorted(set(int(hour) for hour in lightning_hours)))
+    temperature_hours = tuple(sorted(set(int(hour) for hour in temperature_hours)))
     danger_hours = tuple(sorted(set(int(hour) for hour in danger_hours)))
     full_danger_render = set(convective.FORECAST_HOURS).issubset(danger_hours)
+    hourly_archive_root = hourly_archive_root_for_run(args, run)
     if full_danger_render and lightning_hours:
         convective.log("Rendering the complete hourly danger sequence before fire-weather peak overlays.")
         render_danger_worker(args.model, run, data_dir, danger_output_dir, danger_hours)
         danger_hours = ()
-    job_count = sum(bool(hours) for hours in (fourpanel_hours, lightning_hours, danger_hours))
+    job_count = sum(
+        bool(hours)
+        for hours in (fourpanel_hours, lightning_hours, temperature_hours, danger_hours)
+    )
     if job_count == 0:
         return
     if job_count == 1:
@@ -655,6 +739,17 @@ def render_products(
                 lightning_contour_stride,
                 lightning_dcape_stride,
                 lightning_hours,
+                hourly_archive_root,
+            )
+        elif temperature_hours:
+            render_temperature_worker(
+                args.model,
+                run,
+                data_dir,
+                temperature_output_dir,
+                temperature_shade_stride,
+                temperature_contour_stride,
+                temperature_hours,
             )
         else:
             render_danger_worker(args.model, run, data_dir, danger_output_dir, danger_hours)
@@ -662,7 +757,8 @@ def render_products(
     convective.log(
         "Rendering products with up to two worker processes: "
         f"four-panel={len(fourpanel_hours)}, "
-        f"lightning={len(lightning_hours)}, FWI2025 danger={len(danger_hours)}."
+        f"lightning={len(lightning_hours)}, temperature={len(temperature_hours)}, "
+        f"FWI2025 danger={len(danger_hours)}."
     )
     with concurrent.futures.ProcessPoolExecutor(max_workers=2) as executor:
         futures: dict[str, concurrent.futures.Future[int]] = {}
@@ -689,6 +785,18 @@ def render_products(
                 lightning_contour_stride,
                 lightning_dcape_stride,
                 lightning_hours,
+                hourly_archive_root,
+            )
+        if temperature_hours:
+            futures["temperature"] = executor.submit(
+                render_temperature_worker,
+                args.model,
+                run,
+                data_dir,
+                temperature_output_dir,
+                temperature_shade_stride,
+                temperature_contour_stride,
+                temperature_hours,
             )
         if danger_hours:
             futures["FWI2025 danger"] = executor.submit(
@@ -726,6 +834,7 @@ def render_incremental_run(
     data_dir: Path,
     fourpanel_output_dir: Path,
     lightning_output_dir: Path,
+    temperature_output_dir: Path,
     danger_output_dir: Path,
     shade_stride: int,
     contour_stride: int,
@@ -733,6 +842,8 @@ def render_incremental_run(
     lightning_shade_stride: int,
     lightning_contour_stride: int,
     lightning_dcape_stride: int,
+    temperature_shade_stride: int,
+    temperature_contour_stride: int,
     fourpanel_key: str | None,
     danger_key: str | None,
 ) -> convective.RunInfo:
@@ -742,13 +853,18 @@ def render_incremental_run(
         run = wait_for_current_run(args.cycle, args.wait_minutes, args.poll_minutes)
 
     convective.log(f"Using {config.label} run {run.stamp}.")
+    hourly_archive_root = hourly_archive_root_for_run(args, run)
     deadline = time.monotonic() + args.wait_minutes * 60
     all_hours = set(convective.FORECAST_HOURS)
     lightning_keys = lightning_product_keys(args.model)
+    temperature_keys = temperature_product_keys(args.model)
     # Experimental danger frames can begin after F000 when CWFIS bootstrap occurs, so they never gate core products.
     if args.legacy_pages_publish:
         last_published_hours: set[int] = full_product_family_hours_published(
             args.pages_repo, run.stamp, lightning_keys
+        )
+        last_published_hours &= full_product_family_hours_published(
+            args.pages_repo, run.stamp, temperature_keys
         )
         if fourpanel_key is not None:
             last_published_hours &= full_product_hours_published(args.pages_repo, run.stamp, fourpanel_key)
@@ -760,10 +876,18 @@ def render_incremental_run(
         ready = set(ready_hours(run))
         four_done = existing_plot_hours(fourpanel_output_dir, run.stamp, fourpanel_key) if fourpanel_key is not None else set(ready)
         lightning_done = existing_product_family_hours(lightning_output_dir, run.stamp, lightning_keys)
+        temperature_done = existing_product_family_hours(
+            temperature_output_dir,
+            run.stamp,
+            temperature_keys,
+        )
         danger_done = existing_plot_hours(danger_output_dir, run.stamp, danger_key) if danger_key is not None else set(ready)
-        core_done = four_done & lightning_done
+        core_done = four_done & lightning_done & temperature_done
         needs_fourpanel = sorted(ready - four_done)
-        needs_lightning = sorted(ready - lightning_done)
+        missing_hourly_archive = missing_hourly_lpi_plot_hours(hourly_archive_root, run, ready)
+        missing_baseline_archive = missing_baseline_lpi_hours(hourly_archive_root, run, ready)
+        needs_lightning = sorted((ready - lightning_done) | missing_hourly_archive)
+        needs_temperature = sorted(ready - temperature_done)
         danger_is_bootstrap_shortened = bool(danger_done) and all_hours.issubset(core_done)
         needs_danger = (
             sorted(hour for hour in ready - danger_done if danger_hour_ready(run, hour))
@@ -775,14 +899,19 @@ def render_incremental_run(
             convective.log(
                 f"Ready hours for {run.stamp}: {','.join(f'F{hour:03d}' for hour in sorted(ready))}; "
                 f"new four-panel={len(needs_fourpanel)}, "
-                f"lightning={len(needs_lightning)}, FWI2025 danger={len(needs_danger)}."
+                f"lightning/archive={len(needs_lightning)}, "
+                f"temperature={len(needs_temperature)}, "
+                f"baseline archive={len(missing_baseline_archive)}, FWI2025 danger={len(needs_danger)}."
             )
 
-        if needs_fourpanel or needs_lightning or needs_danger or args.force:
+        if needs_fourpanel or needs_lightning or needs_temperature or needs_danger or args.force:
             plot_hours = sorted(
                 ready
                 if args.force
-                else set(needs_fourpanel) | set(needs_lightning) | set(needs_danger)
+                else set(needs_fourpanel)
+                | set(needs_lightning)
+                | set(needs_temperature)
+                | set(needs_danger)
             )
             download_hours(run, data_dir, plot_hours, args.workers)
             archive_downloaded_hours(args, run, data_dir, plot_hours)
@@ -792,6 +921,7 @@ def render_incremental_run(
                 data_dir,
                 fourpanel_output_dir,
                 lightning_output_dir,
+                temperature_output_dir,
                 danger_output_dir,
                 shade_stride,
                 contour_stride,
@@ -799,15 +929,21 @@ def render_incremental_run(
                 lightning_shade_stride,
                 lightning_contour_stride,
                 lightning_dcape_stride,
+                temperature_shade_stride,
+                temperature_contour_stride,
                 sorted(ready if args.force else needs_fourpanel),
                 sorted(ready if args.force else needs_lightning),
+                sorted(ready if args.force else needs_temperature),
                 sorted(ready if args.force and danger_key is not None else needs_danger),
             )
+
+        baseline_hours = sorted(ready if args.force else set(needs_lightning) | missing_baseline_archive)
+        if baseline_hours:
             archive_lpi_baselines(
                 args,
                 run,
                 lightning_output_dir,
-                sorted(ready if args.force else needs_lightning),
+                baseline_hours,
             )
 
         if danger_key is not None and all_hours.issubset(ready):
@@ -843,11 +979,17 @@ def render_incremental_run(
                     lightning_contour_stride,
                     lightning_dcape_stride,
                     tuple(convective.FORECAST_HOURS),
+                    hourly_archive_root,
                 )
                 archive_lpi_baselines(args, run, lightning_output_dir, convective.FORECAST_HOURS)
 
         # Publish core products independently of the optional, potentially shorter danger sequence.
         publishable_hours = existing_product_family_hours(lightning_output_dir, run.stamp, lightning_keys)
+        publishable_hours &= existing_product_family_hours(
+            temperature_output_dir,
+            run.stamp,
+            temperature_keys,
+        )
         if fourpanel_key is not None:
             publishable_hours &= existing_plot_hours(fourpanel_output_dir, run.stamp, fourpanel_key)
         if publishable_hours and (publishable_hours != last_published_hours or args.force):
@@ -866,6 +1008,7 @@ def render_incremental_run(
                                 keep_days=args.keep_days,
                                 fourpanel_plots_dir=fourpanel_output_dir,
                                 lightning_plots_dir=lightning_output_dir,
+                                temperature_plots_dir=temperature_output_dir,
                                 danger_plots_dir=danger_output_dir,
                                 model=args.model,
                                 partial=True,
@@ -897,6 +1040,7 @@ def render_incremental_run(
             convective.log(f"All forecast hours are published for {run.stamp}.")
             cleanup_local_plots(fourpanel_output_dir, args.keep_days)
             cleanup_local_plots(lightning_output_dir, args.keep_days)
+            cleanup_local_plots(temperature_output_dir, args.keep_days)
             cleanup_local_plots(danger_output_dir, args.keep_days)
             cleanup_model_data(data_dir, run.stamp, args.ml_archive_root)
             return run
@@ -917,10 +1061,12 @@ def main(argv: Iterable[str]) -> int:
     args = parse_args(argv)
     config = convective.set_model(args.model)
     fourpanel.set_model(args.model)
+    temperature.set_model(args.model)
     data_dir = args.data_dir or Path(config.default_data_dir)
     output_dir = args.output_dir or Path(config.default_output_dir)
     fourpanel_output_dir = args.fourpanel_output_dir or Path(f"{config.default_output_dir}_fourpanel")
     lightning_output_dir = args.lightning_output_dir or Path(f"{config.default_output_dir}_lightning")
+    temperature_output_dir = args.temperature_output_dir or Path(f"{config.default_output_dir}_temperature")
     danger_output_dir = args.danger_output_dir or Path("plots/experimental_fwi2025_danger")
     shade_stride = args.fourpanel_shade_stride or convective.grid_stride(5.0)
     contour_stride = args.fourpanel_contour_stride or convective.grid_stride(12.0)
@@ -928,15 +1074,22 @@ def main(argv: Iterable[str]) -> int:
     lightning_shade_stride = args.lightning_shade_stride or convective.grid_stride(5.0)
     lightning_contour_stride = args.lightning_contour_stride or convective.grid_stride(12.0)
     lightning_dcape_stride = args.lightning_dcape_stride or convective.grid_stride(18.0)
+    temperature_shade_stride = args.temperature_shade_stride or convective.grid_stride(
+        temperature.SHADE_TARGET_KM
+    )
+    temperature_contour_stride = args.temperature_contour_stride or convective.grid_stride(
+        temperature.CONTOUR_TARGET_KM
+    )
     product_keys = PRODUCTS_BY_MODEL[args.model]
     fourpanel_key = next((key for key in product_keys if key.endswith("fourpanel")), None)
     lightning_keys = lightning_product_keys(args.model)
+    temperature_keys = temperature_product_keys(args.model)
     danger_key = next((key for key in product_keys if key.endswith("fwi2025_danger")), None)
     if args.cycle not in (*convective.AVAILABLE_CYCLES, "latest"):
         raise RuntimeError(f"Unsupported {config.label} cycle: {args.cycle}")
 
     args.ml_archive_preflight_error = None
-    if args.model == "continental" and args.cycle in ml_archive.MODEL_ARCHIVE_CYCLES:
+    if args.model == "continental":
         try:
             ml_archive.verify_archive_writable(args.ml_archive_root)
         except Exception as exc:
@@ -963,6 +1116,7 @@ def main(argv: Iterable[str]) -> int:
                         data_dir,
                         fourpanel_output_dir,
                         lightning_output_dir,
+                        temperature_output_dir,
                         danger_output_dir,
                         shade_stride,
                         contour_stride,
@@ -970,6 +1124,8 @@ def main(argv: Iterable[str]) -> int:
                         lightning_shade_stride,
                         lightning_contour_stride,
                         lightning_dcape_stride,
+                        temperature_shade_stride,
+                        temperature_contour_stride,
                         fourpanel_key,
                         danger_key,
                     )
@@ -986,6 +1142,11 @@ def main(argv: Iterable[str]) -> int:
                                 else set(convective.FORECAST_HOURS)
                             )
                             & full_product_family_hours_published(args.pages_repo, run.stamp, lightning_keys)
+                            & full_product_family_hours_published(
+                                args.pages_repo,
+                                run.stamp,
+                                temperature_keys,
+                            )
                         ),
                         lightning_ml_archive_error=args.ml_archive_preflight_error,
                     )
@@ -993,10 +1154,18 @@ def main(argv: Iterable[str]) -> int:
 
                 run = wait_for_run(args.cycle, args.wait_minutes, args.poll_minutes)
                 convective.log(f"Using {config.label} run {run.stamp}.")
+                hourly_archive_root = hourly_archive_root_for_run(args, run)
+                development_archives_complete = ml_archive.required_run_archives_complete(
+                    args.ml_archive_root,
+                    args.model,
+                    run.cycle,
+                    run.stamp,
+                )
 
                 if (
                     args.legacy_pages_publish
                     and published_run_exists(args.pages_repo, run.stamp, args.model)
+                    and development_archives_complete
                     and not args.force
                 ):
                     convective.log(f"{run.stamp} is already published; skipping render.")
@@ -1004,6 +1173,7 @@ def main(argv: Iterable[str]) -> int:
                     cleanup_local_plots(output_dir, args.keep_days)
                     cleanup_local_plots(fourpanel_output_dir, args.keep_days)
                     cleanup_local_plots(lightning_output_dir, args.keep_days)
+                    cleanup_local_plots(temperature_output_dir, args.keep_days)
                     write_status(
                         args.model,
                         args.cycle,
@@ -1019,16 +1189,45 @@ def main(argv: Iterable[str]) -> int:
                     fourpanel_output_dir, run.stamp, fourpanel_key
                 )
                 lightning_complete = all(plot_set_complete(lightning_output_dir, run.stamp, key) for key in lightning_keys)
+                temperature_complete = all(
+                    plot_set_complete(temperature_output_dir, run.stamp, key)
+                    for key in temperature_keys
+                )
                 danger_complete = danger_key is None or plot_set_complete(danger_output_dir, run.stamp, danger_key)
-                if args.force or not (fourpanel_complete and lightning_complete and danger_complete):
-                    download_hours(run, data_dir, convective.FORECAST_HOURS, args.workers)
-                    archive_downloaded_hours(args, run, data_dir, convective.FORECAST_HOURS)
+                all_plot_hours = set(convective.FORECAST_HOURS)
+                missing_hourly_archive = missing_hourly_lpi_plot_hours(hourly_archive_root, run, all_plot_hours)
+                missing_baseline_archive = missing_baseline_lpi_hours(hourly_archive_root, run, all_plot_hours)
+                needs_broad_archive = ml_archive.should_archive_model_run(args.model, run.cycle) and not ml_archive.run_archive_complete(
+                    args.ml_archive_root,
+                    run.stamp,
+                )
+                fourpanel_render_hours = all_plot_hours if args.force or not fourpanel_complete else set()
+                lightning_render_hours = (
+                    all_plot_hours if args.force or not lightning_complete else missing_hourly_archive
+                )
+                temperature_render_hours = (
+                    all_plot_hours if args.force or not temperature_complete else set()
+                )
+                danger_render_hours = all_plot_hours if args.force or not danger_complete else set()
+                download_plot_hours = (
+                    fourpanel_render_hours
+                    | lightning_render_hours
+                    | temperature_render_hours
+                    | danger_render_hours
+                )
+                if needs_broad_archive:
+                    download_plot_hours |= all_plot_hours
+                if download_plot_hours:
+                    download_hours(run, data_dir, sorted(download_plot_hours), args.workers)
+                    archive_downloaded_hours(args, run, data_dir, sorted(download_plot_hours))
 
                 if fourpanel_complete and not args.force:
                     convective.log(f"Using existing complete four-panel plot set for {run.stamp}.")
 
                 if lightning_complete and not args.force:
                     convective.log(f"Using existing complete lightning plot set for {run.stamp}.")
+                if temperature_complete and not args.force:
+                    convective.log(f"Using existing complete temperature plot set for {run.stamp}.")
                 if danger_complete and danger_key is not None and not args.force:
                     convective.log(f"Using existing complete FWI2025 danger plot set for {run.stamp}.")
                 render_products(
@@ -1037,6 +1236,7 @@ def main(argv: Iterable[str]) -> int:
                     data_dir,
                     fourpanel_output_dir,
                     lightning_output_dir,
+                    temperature_output_dir,
                     danger_output_dir,
                     shade_stride,
                     contour_stride,
@@ -1044,15 +1244,18 @@ def main(argv: Iterable[str]) -> int:
                     lightning_shade_stride,
                     lightning_contour_stride,
                     lightning_dcape_stride,
-                    () if fourpanel_complete and not args.force else convective.FORECAST_HOURS,
-                    () if lightning_complete and not args.force else convective.FORECAST_HOURS,
-                    () if danger_complete and not args.force else convective.FORECAST_HOURS,
+                    temperature_shade_stride,
+                    temperature_contour_stride,
+                    sorted(fourpanel_render_hours),
+                    sorted(lightning_render_hours),
+                    sorted(temperature_render_hours),
+                    sorted(danger_render_hours),
                 )
                 archive_lpi_baselines(
                     args,
                     run,
                     lightning_output_dir,
-                    () if lightning_complete and not args.force else convective.FORECAST_HOURS,
+                    sorted(lightning_render_hours | missing_baseline_archive),
                 )
 
                 if args.legacy_pages_publish:
@@ -1070,6 +1273,7 @@ def main(argv: Iterable[str]) -> int:
                                     keep_days=args.keep_days,
                                     fourpanel_plots_dir=fourpanel_output_dir,
                                     lightning_plots_dir=lightning_output_dir,
+                                    temperature_plots_dir=temperature_output_dir,
                                     danger_plots_dir=danger_output_dir,
                                     model=args.model,
                                 )
@@ -1082,6 +1286,7 @@ def main(argv: Iterable[str]) -> int:
                 cleanup_model_data(data_dir, run.stamp, args.ml_archive_root)
                 cleanup_local_plots(fourpanel_output_dir, args.keep_days)
                 cleanup_local_plots(lightning_output_dir, args.keep_days)
+                cleanup_local_plots(temperature_output_dir, args.keep_days)
                 cleanup_local_plots(danger_output_dir, args.keep_days)
                 write_status(
                     args.model,

@@ -13,7 +13,7 @@ import sys
 import warnings
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import matplotlib
 
@@ -292,10 +292,18 @@ class LightningFields:
     gust_kmh: np.ndarray
     u10_ms: np.ndarray
     v10_ms: np.ndarray
+    charge_depth_hpa: np.ndarray | None = None
+    mid_rh: np.ndarray | None = None
+    upward_w_ms: np.ndarray | None = None
+    precip_rate_mm_h: np.ndarray | None = None
 
 
 def subset_lightning_fields(fields: LightningFields, yslice: slice, xslice: slice) -> LightningFields:
-    return LightningFields(*(getattr(fields, name)[yslice, xslice] for name in fields.__dataclass_fields__))
+    values = []
+    for name in fields.__dataclass_fields__:
+        value = getattr(fields, name)
+        values.append(None if value is None else value[yslice, xslice])
+    return LightningFields(*values)
 
 
 @dataclass(frozen=True)
@@ -510,7 +518,7 @@ def compute_charging_layer(
     psfc_hpa: np.ndarray,
     yslice: slice,
     xslice: slice,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     weighted_rh = np.zeros(psfc_hpa.shape, dtype=np.float32)
     weights = np.zeros(psfc_hpa.shape, dtype=np.float32)
     mid_rh_sum = np.zeros(psfc_hpa.shape, dtype=np.float32)
@@ -542,7 +550,12 @@ def compute_charging_layer(
     charge_depth = ramp(weights, 35.0, 150.0)
     charge_rh_factor = ramp(charge_rh, 45.0, 80.0)
     charge_factor = np.sqrt(np.clip(charge_rh_factor * charge_depth, 0.0, 1.0))
-    return np.clip(charge_factor, 0.0, 1.0), np.clip(charge_rh, 0.0, 100.0), np.clip(mid_rh, 0.0, 100.0)
+    return (
+        np.clip(charge_factor, 0.0, 1.0),
+        np.clip(charge_rh, 0.0, 100.0),
+        np.clip(mid_rh, 0.0, 100.0),
+        np.maximum(weights, 0.0),
+    )
 
 
 def compute_subcloud_rh(
@@ -755,7 +768,14 @@ def compute_instantaneous_lightning_fields(
     prate_mm_h = np.maximum(0.0, prate * 3600.0)
     precip_3h = compute_precip_3h(run_dir, run, fhour, yslice, xslice)
 
-    charge_factor, charge_rh, mid_rh = compute_charging_layer(run_dir, run, fhour, psfc_hpa, yslice, xslice)
+    charge_factor, charge_rh, mid_rh, charge_depth_hpa = compute_charging_layer(
+        run_dir,
+        run,
+        fhour,
+        psfc_hpa,
+        yslice,
+        xslice,
+    )
     subcloud_rh = compute_subcloud_rh(run_dir, run, fhour, psfc_hpa, yslice, xslice, tmp2_c, dpt2_c)
     surface_rh = relative_humidity_from_t_td(tmp2_c, dpt2_c)
     u10_ms = crop(hour_file(run_dir, run, fhour, "UGRD", "TGL", "10"), yslice, xslice)
@@ -822,6 +842,10 @@ def compute_instantaneous_lightning_fields(
         gust_kmh=gust_kmh.astype(np.float32),
         u10_ms=u10_ms.astype(np.float32),
         v10_ms=v10_ms.astype(np.float32),
+        charge_depth_hpa=charge_depth_hpa.astype(np.float32),
+        mid_rh=mid_rh.astype(np.float32),
+        upward_w_ms=upward_w.astype(np.float32),
+        precip_rate_mm_h=prate_mm_h.astype(np.float32),
     )
 
 
@@ -862,11 +886,13 @@ def compute_lightning_fields(
     lon: np.ndarray,
     terrain_m: np.ndarray,
     dcape_stride: int,
+    snapshot_callback: Callable[[int, LightningFields], None] | None = None,
 ) -> LightningFields:
     """Compute hourly diagnostics and aggregate hazards over the plotted three-hour window."""
     snapshot_hours = diagnostic_window_hours(fhour)
-    snapshots = tuple(
-        compute_instantaneous_lightning_fields(
+    snapshots_list: list[LightningFields] = []
+    for snapshot_hour in snapshot_hours:
+        snapshot = compute_instantaneous_lightning_fields(
             run_dir,
             run,
             snapshot_hour,
@@ -877,8 +903,10 @@ def compute_lightning_fields(
             terrain_m,
             dcape_stride,
         )
-        for snapshot_hour in snapshot_hours
-    )
+        if snapshot_callback is not None:
+            snapshot_callback(snapshot_hour, snapshot)
+        snapshots_list.append(snapshot)
+    snapshots = tuple(snapshots_list)
     current = snapshots[-1]
     if len(snapshots) == 1:
         return current
@@ -914,6 +942,10 @@ def compute_lightning_fields(
         gust_kmh=gust_kmh,
         u10_ms=u10_ms,
         v10_ms=v10_ms,
+        charge_depth_hpa=current.charge_depth_hpa,
+        mid_rh=current.mid_rh,
+        upward_w_ms=current.upward_w_ms,
+        precip_rate_mm_h=current.precip_rate_mm_h,
     )
 
 
@@ -1446,6 +1478,7 @@ def make_region_plots(
     fwi_dir: Path = FWI_CACHE_DIR,
     no_fwi: bool = False,
     region_keys: Iterable[str] = ("bc",),
+    hourly_archive_root: Path | None = None,
 ) -> list[Path]:
     """Compute each forecast hour once, then render all requested regional crops."""
 
@@ -1465,6 +1498,29 @@ def make_region_plots(
     base_yslice, base_xslice = subset_slices(lat, lon, model_config().extent)
     base_lat = lat[base_yslice, base_xslice]
     base_lon = lon[base_yslice, base_xslice]
+    archived_hourly_paths: set[Path] = set()
+    snapshot_callback: Callable[[int, LightningFields], None] | None = None
+    if hourly_archive_root is not None:
+        import lightning_ml_archive as ml_archive
+
+        if ml_archive.should_archive_hourly_lpi_run(model_config().key, run.cycle):
+            hourly_stride = max(1, int(round(ml_archive.MODEL_RESOLUTION_KM / model_config().resolution_km)))
+
+            def archive_snapshot(snapshot_hour: int, snapshot: LightningFields) -> None:
+                archived_hourly_paths.add(
+                    ml_archive.archive_hourly_lpi_ingredients(
+                        hourly_archive_root,
+                        run,
+                        snapshot_hour,
+                        base_lat,
+                        base_lon,
+                        snapshot,
+                        hourly_stride,
+                        LPI_FORMULA_VERSION,
+                    )
+                )
+
+            snapshot_callback = archive_snapshot
     terrain_path = (
         run_dir
         / f"{hrdps.TERRAIN_FHOUR:03d}"
@@ -1494,6 +1550,7 @@ def make_region_plots(
             lon,
             terrain_m,
             dcape_stride,
+            snapshot_callback=snapshot_callback,
         )
         cache_source_path = plot_dir / f"{model_output_prefix('lightning')}_{run.stamp}_f{fhour:03d}.png"
         cache_path = save_lpi_cache(
@@ -1604,6 +1661,8 @@ def make_region_plots(
                 watersheds,
             )
             out_paths.append(out_path)
+    if archived_hourly_paths:
+        log(f"Archived {len(archived_hourly_paths)} hourly LPI ingredient field(s) for {run.stamp}.")
     return out_paths
 
 

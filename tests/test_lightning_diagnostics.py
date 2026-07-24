@@ -156,6 +156,7 @@ class LightningDiagnosticTest(unittest.TestCase):
             "compute_instantaneous_lightning_fields",
             side_effect=snapshots,
         ) as compute:
+            archived_snapshots: list[tuple[int, lightning.LightningFields]] = []
             result = lightning.compute_lightning_fields(
                 Path("data"),
                 Mock(),
@@ -166,9 +167,12 @@ class LightningDiagnosticTest(unittest.TestCase):
                 np.zeros((1, 2), dtype=np.float32),
                 np.zeros((1, 2), dtype=np.float32),
                 1,
+                snapshot_callback=lambda hour, fields: archived_snapshots.append((hour, fields)),
             )
 
         self.assertEqual([call.args[2] for call in compute.call_args_list], [1, 2, 3])
+        self.assertEqual([hour for hour, _ in archived_snapshots], [1, 2, 3])
+        self.assertEqual([fields for _, fields in archived_snapshots], list(snapshots))
         np.testing.assert_allclose(result.potential, [[80.0, 90.0]])
         np.testing.assert_allclose(result.dry_potential, [[80.0, 0.0]])
         np.testing.assert_allclose(result.gust_kmh, [[50.0, 80.0]])

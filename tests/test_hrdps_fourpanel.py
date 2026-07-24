@@ -22,6 +22,7 @@ class HrdpsFourPanelTest(unittest.TestCase):
         expanded = fourpanel.fourpanel_extent()
         original = fourpanel.model_config().extent
 
+        self.assertEqual(expanded, (-139.6, -105.3, 45.5, 59.8))
         self.assertLessEqual(expanded[2], 45.5)
         self.assertGreaterEqual(expanded[3], 59.7)
         self.assertLess(expanded[0], original[0])

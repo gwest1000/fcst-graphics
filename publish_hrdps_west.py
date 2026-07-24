@@ -21,6 +21,7 @@ from make_hrdps_west_convective import parse_stamp
 from make_hrdps_west_fourpanel import FORECAST_HOURS as FOURPANEL_FORECAST_HOURS
 from make_hrdps_west_lightning import FORECAST_HOURS as LIGHTNING_FORECAST_HOURS
 from make_hrdps_evolved_danger_class import FORECAST_HOURS as FWI2025_DANGER_FORECAST_HOURS
+from make_hrdps_temperature import FORECAST_HOURS as TEMPERATURE_FORECAST_HOURS
 
 DEFAULT_PAGES_REPO = Path("/Users/greg/projects/fcstpp-reports-pages")
 STAMP_RE = re.compile(r"^\d{8}T\d{2}Z$")
@@ -132,6 +133,45 @@ PRODUCTS: dict[str, ProductConfig] = {
         archive_subdir="lightning/ne",
         model_key="west",
     ),
+    "temperature_sw": ProductConfig(
+        key="temperature_sw",
+        prefix="hrdps_west_temperature_sw",
+        label="2 m Temperature",
+        category="Surface",
+        plot_type="2 m Temperature",
+        area="SW BC",
+        model="HRDPS-West 1 km",
+        description="Valid-time 2 m temperature shaded every 2°C with labelled grey isotherms every 10°C.",
+        hours=TEMPERATURE_FORECAST_HOURS,
+        archive_subdir="temperature/sw",
+        model_key="west",
+    ),
+    "temperature_se": ProductConfig(
+        key="temperature_se",
+        prefix="hrdps_west_temperature_se",
+        label="2 m Temperature",
+        category="Surface",
+        plot_type="2 m Temperature",
+        area="SE BC",
+        model="HRDPS-West 1 km",
+        description="Valid-time 2 m temperature shaded every 2°C with labelled grey isotherms every 10°C.",
+        hours=TEMPERATURE_FORECAST_HOURS,
+        archive_subdir="temperature/se",
+        model_key="west",
+    ),
+    "temperature_ne": ProductConfig(
+        key="temperature_ne",
+        prefix="hrdps_west_temperature_ne",
+        label="2 m Temperature",
+        category="Surface",
+        plot_type="2 m Temperature",
+        area="NE BC",
+        model="HRDPS-West 1 km",
+        description="Valid-time 2 m temperature shaded every 2°C with labelled grey isotherms every 10°C.",
+        hours=TEMPERATURE_FORECAST_HOURS,
+        archive_subdir="temperature/ne",
+        model_key="west",
+    ),
     "lightning_verif": ProductConfig(
         key="lightning_verif",
         prefix="hrdps_west_lightning_verif",
@@ -169,6 +209,19 @@ PRODUCTS: dict[str, ProductConfig] = {
         description=FIRE_WEATHER_TWO_PANEL_DESCRIPTION,
         hours=LIGHTNING_FORECAST_HOURS,
         archive_subdir="continental/lightning_twopanel",
+        model_key="continental",
+    ),
+    "continental_temperature": ProductConfig(
+        key="continental_temperature",
+        prefix="hrdps_continental_temperature",
+        label="2 m Temperature",
+        category="Surface",
+        plot_type="2 m Temperature",
+        area="BC",
+        model="HRDPS 2.5 km",
+        description="Valid-time 2 m temperature shaded every 2°C with labelled grey isotherms every 10°C.",
+        hours=TEMPERATURE_FORECAST_HOURS,
+        archive_subdir="continental/temperature",
         model_key="continental",
     ),
     "continental_lightning_verif": ProductConfig(
@@ -226,10 +279,19 @@ PRODUCTS: dict[str, ProductConfig] = {
 }
 
 PRODUCTS_BY_MODEL = {
-    "west": ("lightning_sw", "lightning_se", "lightning_ne", "fwi2025_danger"),
+    "west": (
+        "lightning_sw",
+        "lightning_se",
+        "lightning_ne",
+        "temperature_sw",
+        "temperature_se",
+        "temperature_ne",
+        "fwi2025_danger",
+    ),
     "continental": (
         "continental_fourpanel",
         "continental_lightning_twopanel",
+        "continental_temperature",
         "continental_fwi2025_danger",
     ),
     "west_verif": ("lightning_verif",),
@@ -257,6 +319,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--plots-dir", type=Path, default=None, help="Convective plot directory.")
     parser.add_argument("--fourpanel-plots-dir", type=Path, default=None)
     parser.add_argument("--lightning-plots-dir", type=Path, default=None)
+    parser.add_argument("--temperature-plots-dir", type=Path, default=None)
     parser.add_argument("--danger-plots-dir", type=Path, default=None)
     parser.add_argument("--lightning-verif-plots-dir", type=Path, default=None)
     parser.add_argument("--pages-repo", type=Path, default=DEFAULT_PAGES_REPO)
@@ -325,6 +388,10 @@ def default_plot_dir_for_product(product_key: str, model: str) -> Path:
         return Path("plots/hrdps_continental_lightning")
     if product_key.startswith("lightning"):
         return Path("plots/hrdps_west_lightning")
+    if product_key == "continental_temperature":
+        return Path("plots/hrdps_continental_temperature")
+    if product_key.startswith("temperature"):
+        return Path("plots/hrdps_west_temperature")
     if product_key.endswith("fwi2025_danger"):
         return Path("plots/experimental_fwi2025_danger")
     if product_key == "continental_fourpanel":
@@ -344,6 +411,7 @@ def plot_dir_for_product(
     plots_dir: Path | None,
     fourpanel_plots_dir: Path | None,
     lightning_plots_dir: Path | None,
+    temperature_plots_dir: Path | None,
     danger_plots_dir: Path | None = None,
     lightning_verif_plots_dir: Path | None = None,
 ) -> Path:
@@ -353,6 +421,8 @@ def plot_dir_for_product(
         return fourpanel_plots_dir or default_plot_dir_for_product(product_key, model)
     if "lightning" in product_key:
         return lightning_plots_dir or default_plot_dir_for_product(product_key, model)
+    if "temperature" in product_key:
+        return temperature_plots_dir or default_plot_dir_for_product(product_key, model)
     if product_key.endswith("fwi2025_danger"):
         return danger_plots_dir or default_plot_dir_for_product(product_key, model)
     return plots_dir or default_plot_dir_for_product(product_key, model)
@@ -548,6 +618,7 @@ def publish(
     keep_days: int,
     fourpanel_plots_dir: Path | None = None,
     lightning_plots_dir: Path | None = None,
+    temperature_plots_dir: Path | None = None,
     danger_plots_dir: Path | None = None,
     lightning_verif_plots_dir: Path | None = None,
     model: str = "west",
@@ -566,7 +637,16 @@ def publish(
         copied_any = False
         for product_key in product_keys:
             source_dir = (
-                plot_dir_for_product(product_key, model, plots_dir, fourpanel_plots_dir, lightning_plots_dir, danger_plots_dir, lightning_verif_plots_dir)
+                plot_dir_for_product(
+                    product_key,
+                    model,
+                    plots_dir,
+                    fourpanel_plots_dir,
+                    lightning_plots_dir,
+                    temperature_plots_dir,
+                    danger_plots_dir,
+                    lightning_verif_plots_dir,
+                )
                 / stamp
             )
             if available_image_names(source_dir, stamp, product_key):
@@ -577,7 +657,16 @@ def publish(
     else:
         for product_key in product_keys:
             source_dir = (
-                plot_dir_for_product(product_key, model, plots_dir, fourpanel_plots_dir, lightning_plots_dir, danger_plots_dir, lightning_verif_plots_dir)
+                plot_dir_for_product(
+                    product_key,
+                    model,
+                    plots_dir,
+                    fourpanel_plots_dir,
+                    lightning_plots_dir,
+                    temperature_plots_dir,
+                    danger_plots_dir,
+                    lightning_verif_plots_dir,
+                )
                 / stamp
             )
             ensure_plot_set(source_dir, stamp, product_key)
@@ -599,6 +688,7 @@ def main(argv: Iterable[str]) -> int:
         keep_days=args.keep_days,
         fourpanel_plots_dir=args.fourpanel_plots_dir,
         lightning_plots_dir=args.lightning_plots_dir,
+        temperature_plots_dir=args.temperature_plots_dir,
         danger_plots_dir=args.danger_plots_dir,
         lightning_verif_plots_dir=args.lightning_verif_plots_dir,
         model=args.model,

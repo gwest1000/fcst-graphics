@@ -534,6 +534,40 @@
           </li>
           <li class="category">
             <div class="category-title">Surface</div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="temperature">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">2 m Temperature</span>
+            </button>
+            <div class="submenu" data-plot-panel="temperature">
+              <button class="menu-button area" type="button" data-area-toggle="temperature_bc">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">BC</span>
+              </button>
+              <div class="submenu" data-model-panel="temperature_bc">
+                <button class="menu-button model" type="button" data-product-select="continental_temperature">HRDPS 2.5 km</button>
+              </div>
+              <button class="menu-button area" type="button" data-area-toggle="temperature_sw">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">Southwest BC</span>
+              </button>
+              <div class="submenu" data-model-panel="temperature_sw">
+                <button class="menu-button model" type="button" data-product-select="temperature_sw">HRDPS-West 1 km</button>
+              </div>
+              <button class="menu-button area" type="button" data-area-toggle="temperature_se">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">Southeast BC</span>
+              </button>
+              <div class="submenu" data-model-panel="temperature_se">
+                <button class="menu-button model" type="button" data-product-select="temperature_se">HRDPS-West 1 km</button>
+              </div>
+              <button class="menu-button area" type="button" data-area-toggle="temperature_ne">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">Northeast BC</span>
+              </button>
+              <div class="submenu" data-model-panel="temperature_ne">
+                <button class="menu-button model" type="button" data-product-select="temperature_ne">HRDPS-West 1 km</button>
+              </div>
+            </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="lightning">
               <span class="chevron" aria-hidden="true"></span>
               <span class="label">Fire Weather</span>
@@ -723,6 +757,12 @@
           "lightning_se",
           "lightning_ne",
         ],
+        temperature: [
+          "continental_temperature",
+          "temperature_sw",
+          "temperature_se",
+          "temperature_ne",
+        ],
         fwi2025_danger: ["fwi2025_danger", "continental_fwi2025_danger"],
         lightning_verif: ["lightning_verif", "continental_lightning_verif"],
         fire_danger_verif: ["fire_danger_verif"],
@@ -734,6 +774,10 @@
         lightning_sw: ["lightning_sw"],
         lightning_se: ["lightning_se"],
         lightning_ne: ["lightning_ne"],
+        temperature_bc: ["continental_temperature"],
+        temperature_sw: ["temperature_sw"],
+        temperature_se: ["temperature_se"],
+        temperature_ne: ["temperature_ne"],
         fwi2025_danger: ["fwi2025_danger", "continental_fwi2025_danger"],
         lightning_verif: ["lightning_verif", "continental_lightning_verif"],
         fire_danger_verif: ["fire_danger_verif"],
@@ -745,6 +789,10 @@
         lightning_sw: "lightning",
         lightning_se: "lightning",
         lightning_ne: "lightning",
+        temperature_bc: "temperature",
+        temperature_sw: "temperature",
+        temperature_se: "temperature",
+        temperature_ne: "temperature",
         fwi2025_danger: "fwi2025_danger",
         lightning_verif: "lightning_verif",
         fire_danger_verif: "fire_danger_verif",
@@ -822,6 +870,10 @@
           productFor(activeRun, "lightning_sw") ||
           productFor(activeRun, "lightning_se") ||
           productFor(activeRun, "lightning_ne") ||
+          productFor(activeRun, "continental_temperature") ||
+          productFor(activeRun, "temperature_sw") ||
+          productFor(activeRun, "temperature_se") ||
+          productFor(activeRun, "temperature_ne") ||
           productFor(activeRun, "fwi2025_danger") ||
           productFor(activeRun, "continental_fwi2025_danger") ||
           productFor(activeRun, "fire_danger_verif") ||
@@ -1025,6 +1077,10 @@
             "lightning_sw",
             "lightning_se",
             "lightning_ne",
+            "continental_temperature",
+            "temperature_sw",
+            "temperature_se",
+            "temperature_ne",
             "fwi2025_danger",
             "continental_fwi2025_danger",
             "fire_danger_verif",

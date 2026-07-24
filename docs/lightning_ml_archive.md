@@ -24,6 +24,7 @@ The root contains:
 observations/eccc_lightning_3h/schema_v1/
 model/hrdps_continental_5km/schema_v1/
 baseline/hrdps_continental_lpi_5km/schema_v1/
+hourly/hrdps_continental_lpi_ingredients_5km/schema_v1/
 status.json
 ```
 
@@ -52,6 +53,12 @@ The schema includes:
 Static latitude, longitude and terrain are stored once. A grid hash prevents incompatible grids from being mixed. Every forecast-hour sidecar records source filenames, clipping counts, a checksum and valid time. A run is complete only when all 17 hours and its manifest are present.
 
 The handmade LPI is archived separately at 0.5-point precision with its formula version. This supports direct evaluation of later formula changes against the forecast that was actually issued.
+
+## Hourly LPI Ingredients
+
+All four continental cycles (00Z, 06Z, 12Z and 18Z) retain compact instantaneous ingredients at 5 km for every hour from F000 through F048. The archive stores MU-LI, CAPE, charging-layer RH and weighted depth, midlevel RH, resolved upward velocity, trailing-three-hour precipitation, precipitation rate, trigger, surface/subcloud RH and the instantaneous issued-formula LPI.
+
+These fields preserve the hourly detail used by each plotted three-hour maximum without duplicating the much larger pressure-profile archive. On the archived 5 km grid they support faithful tests of LI/CAPE weighting, charging-RH/depth ramps, updraft and precipitation trigger thresholds, dry-lightning humidity treatment and probabilistic calibration. More fundamental changes to the charging-layer temperature definition still use the broader 00Z/12Z profile archive at its three-hour snapshots.
 
 ## Operational Safety
 
@@ -90,5 +97,7 @@ After at least three weeks of convective-season observations, evaluate the handm
 5. Adjust the handmade formulation only when a repeatable conditional bias appears across multiple storm days.
 
 Do not introduce terrain, interior or marine priors during this first review. Use terrain and region only to stratify verification and identify whether the model fields already explain any differences.
+
+Open tuning hypothesis: subjective case review suggests the current LPI may perform less well in BC's maritime climate than in the Interior. Stratify reliability, misses and false alarms by maritime versus interior regime before changing the formula; do not treat this observation as established skill evidence.
 
 The scheduled verification job declares the initial dataset ready at a 21-day archive span, at least 95% three-hour coverage, and at least 12 lightning-active blocks. It records readiness in `logs/state/lpi_verification.status.json` and sends a one-time macOS notification. This threshold starts an initial tuning review; it does not make three weeks sufficient for final out-of-sample validation.

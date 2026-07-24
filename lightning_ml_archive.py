@@ -23,6 +23,9 @@ ARCHIVE_SCHEMA_VERSION = 1
 MODEL_ARCHIVE_CYCLES = frozenset({"00", "12"})
 MODEL_FORECAST_HOURS = tuple(range(0, 49, 3))
 MODEL_RESOLUTION_KM = 5.0
+HOURLY_LPI_SCHEMA_VERSION = 1
+HOURLY_LPI_ARCHIVE_CYCLES = frozenset({"00", "06", "12", "18"})
+HOURLY_LPI_FORECAST_HOURS = tuple(range(0, 49))
 OBS_BLOCK_HOURS = 3
 OBS_SOURCE_MINUTES = 10
 OBS_SOURCES_PER_BLOCK = OBS_BLOCK_HOURS * 60 // OBS_SOURCE_MINUTES
@@ -72,6 +75,15 @@ class FieldSpec:
     optional_at_f000: bool = False
 
 
+@dataclass(frozen=True)
+class HourlyIngredientSpec:
+    key: str
+    attribute: str
+    units: str
+    offset: float
+    scale: float
+
+
 def _profile_specs() -> list[FieldSpec]:
     specs: list[FieldSpec] = []
     for level in PROFILE_LEVELS_HPA:
@@ -113,6 +125,21 @@ MODEL_FIELD_SPECS = tuple(
         FieldSpec("height_500", "HGT", "ISBL_0500", "gpm", 5500.0, 0.5),
         FieldSpec("absolute_vorticity_500", "ABSV", "ISBL_0500", "s-1", 0.0, 1.0e-6),
     ]
+)
+
+HOURLY_LPI_INGREDIENT_SPECS = (
+    HourlyIngredientSpec("potential", "potential", "%", 0.0, 0.01),
+    HourlyIngredientSpec("mu_li", "li", "K", 0.0, 0.01),
+    HourlyIngredientSpec("cape", "cape", "J kg-1", 0.0, 1.0),
+    HourlyIngredientSpec("charge_rh", "charge_rh", "%", 0.0, 0.01),
+    HourlyIngredientSpec("charge_depth", "charge_depth_hpa", "hPa weighted", 0.0, 0.05),
+    HourlyIngredientSpec("mid_rh", "mid_rh", "%", 0.0, 0.01),
+    HourlyIngredientSpec("upward_w", "upward_w_ms", "m s-1", 0.0, 0.001),
+    HourlyIngredientSpec("precip_3h", "precip_3h", "mm", 0.0, 0.01),
+    HourlyIngredientSpec("precip_rate", "precip_rate_mm_h", "mm h-1", 0.0, 0.01),
+    HourlyIngredientSpec("trigger", "trigger", "1", 0.0, 0.0001),
+    HourlyIngredientSpec("surface_rh", "surface_rh", "%", 0.0, 0.01),
+    HourlyIngredientSpec("subcloud_rh", "subcloud_rh", "%", 0.0, 0.01),
 )
 
 
@@ -187,6 +214,10 @@ def model_archive_dir(root: Path) -> Path:
 
 def baseline_archive_dir(root: Path) -> Path:
     return root / "baseline" / "hrdps_continental_lpi_5km" / f"schema_v{ARCHIVE_SCHEMA_VERSION}"
+
+
+def hourly_lpi_archive_dir(root: Path) -> Path:
+    return root / "hourly" / "hrdps_continental_lpi_ingredients_5km" / f"schema_v{HOURLY_LPI_SCHEMA_VERSION}"
 
 
 def parse_obs_time(path_or_name: str | Path) -> dt.datetime | None:
@@ -369,6 +400,10 @@ def should_archive_model_run(model_key: str, cycle: str) -> bool:
     return model_key == "continental" and cycle in MODEL_ARCHIVE_CYCLES
 
 
+def should_archive_hourly_lpi_run(model_key: str, cycle: str) -> bool:
+    return model_key == "continental" and cycle in HOURLY_LPI_ARCHIVE_CYCLES
+
+
 def model_source_filename(spec: FieldSpec, stamp: str, fhour: int) -> str:
     return f"{stamp}_MSC_HRDPS_{spec.variable}_{spec.level_tag}_RLatLon0.0225_PT{fhour:03d}H.grib2"
 
@@ -498,8 +533,145 @@ def baseline_hour_archive_path(root: Path, stamp: str, fhour: int) -> Path:
     return baseline_archive_dir(root) / stamp[:4] / stamp / f"f{fhour:03d}.npz"
 
 
+def hourly_lpi_run_archive_dir(root: Path, stamp: str) -> Path:
+    return hourly_lpi_archive_dir(root) / stamp[:4] / stamp
+
+
+def hourly_lpi_hour_archive_path(root: Path, stamp: str, fhour: int) -> Path:
+    return hourly_lpi_run_archive_dir(root, stamp) / f"f{fhour:03d}.npz"
+
+
+def _write_hourly_lpi_schema(root: Path) -> None:
+    path = hourly_lpi_archive_dir(root) / "schema.json"
+    payload = {
+        "schema_version": HOURLY_LPI_SCHEMA_VERSION,
+        "model": "ECCC HRDPS continental 2.5 km",
+        "archive_resolution_km": MODEL_RESOLUTION_KM,
+        "eligible_cycles_utc": sorted(HOURLY_LPI_ARCHIVE_CYCLES),
+        "forecast_hours": list(HOURLY_LPI_FORECAST_HOURS),
+        "temporal_representation": "instantaneous hourly snapshot",
+        "fill_value": int(FILL_VALUE),
+        "packing_formula": "physical_value = packed_int16 * scale + offset",
+        "fields": [asdict(spec) for spec in HOURLY_LPI_INGREDIENT_SPECS],
+    }
+    if path.exists():
+        existing = json.loads(path.read_text())
+        if existing != payload:
+            raise RuntimeError(f"Hourly LPI archive schema mismatch at {path}; increment its schema version.")
+        return
+    write_json_atomic(path, payload)
+
+
+def _update_hourly_lpi_manifest(root: Path, run: hrdps.RunInfo, grid_hash: str) -> Path:
+    run_dir = hourly_lpi_run_archive_dir(root, run.stamp)
+    archived_hours = [
+        hour for hour in HOURLY_LPI_FORECAST_HOURS if hourly_lpi_hour_archive_path(root, run.stamp, hour).exists()
+    ]
+    total_bytes = sum(hourly_lpi_hour_archive_path(root, run.stamp, hour).stat().st_size for hour in archived_hours)
+    payload = {
+        "schema_version": HOURLY_LPI_SCHEMA_VERSION,
+        "model_key": "continental",
+        "model_label": "ECCC HRDPS continental 2.5 km",
+        "archive_resolution_km": MODEL_RESOLUTION_KM,
+        "run_stamp": run.stamp,
+        "cycle_utc": run.cycle,
+        "init_time_utc": utc_iso(run.init_time),
+        "expected_hours": list(HOURLY_LPI_FORECAST_HOURS),
+        "archived_hours": archived_hours,
+        "complete": archived_hours == list(HOURLY_LPI_FORECAST_HOURS),
+        "grid_hash": grid_hash,
+        "archive_bytes": total_bytes,
+        "updated_at_utc": utc_iso(dt.datetime.now(dt.timezone.utc)),
+    }
+    path = run_dir / "manifest.json"
+    write_json_atomic(path, payload)
+    return path
+
+
+def archive_hourly_lpi_ingredients(
+    root: Path,
+    run: hrdps.RunInfo,
+    fhour: int,
+    lat: np.ndarray,
+    lon: np.ndarray,
+    fields: object,
+    stride: int,
+    formula_version: str,
+) -> Path:
+    if not should_archive_hourly_lpi_run("continental", run.cycle):
+        raise ValueError(f"Run {run.stamp} is not eligible for the hourly LPI ingredient archive.")
+    if fhour not in HOURLY_LPI_FORECAST_HOURS:
+        raise ValueError(f"Unsupported hourly LPI forecast hour: {fhour}")
+    root = ensure_archive_root(root)
+    _write_hourly_lpi_schema(root)
+    out_path = hourly_lpi_hour_archive_path(root, run.stamp, fhour)
+    sidecar_path = out_path.with_suffix(".json")
+    if out_path.exists() and sidecar_path.exists():
+        return out_path
+
+    sample = (slice(None, None, max(1, int(stride))), slice(None, None, max(1, int(stride))))
+    sampled_lat = np.asarray(lat[sample], dtype=np.float32)
+    sampled_lon = np.asarray(lon[sample], dtype=np.float32)
+    grid_hash = _ensure_grid_archive(root, sampled_lat, sampled_lon)
+    arrays: dict[str, np.ndarray] = {}
+    clipped_counts: dict[str, int] = {}
+    for spec in HOURLY_LPI_INGREDIENT_SPECS:
+        value = getattr(fields, spec.attribute, None)
+        if value is None:
+            raise RuntimeError(f"Hourly LPI field {spec.attribute} is unavailable for {run.stamp} F{fhour:03d}.")
+        sampled = np.asarray(value[sample], dtype=np.float32)
+        if sampled.shape != sampled_lat.shape:
+            raise RuntimeError(
+                f"Hourly LPI field {spec.attribute} has shape {sampled.shape}; expected {sampled_lat.shape}."
+            )
+        arrays[spec.key], clipped_counts[spec.key] = _pack_field(sampled, spec)
+
+    valid_time = run.init_time + dt.timedelta(hours=fhour)
+    arrays.update(
+        schema_version=np.asarray([HOURLY_LPI_SCHEMA_VERSION], dtype=np.int16),
+        run_stamp=np.asarray(run.stamp),
+        cycle_utc=np.asarray([int(run.cycle)], dtype=np.int8),
+        forecast_hour=np.asarray([fhour], dtype=np.int16),
+        init_unix=np.asarray([int(run.init_time.timestamp())], dtype=np.int64),
+        valid_unix=np.asarray([int(valid_time.timestamp())], dtype=np.int64),
+        formula_version=np.asarray(formula_version),
+        grid_hash=np.asarray(grid_hash),
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = out_path.with_suffix(out_path.suffix + f".{os.getpid()}.tmp")
+    try:
+        with tmp_path.open("wb") as handle:
+            np.savez_compressed(handle, **arrays)
+        with np.load(tmp_path) as check:
+            if int(check["forecast_hour"][0]) != fhour or str(check["grid_hash"].item()) != grid_hash:
+                raise RuntimeError(f"Failed verification of hourly LPI archive {tmp_path}.")
+        tmp_path.replace(out_path)
+    finally:
+        tmp_path.unlink(missing_ok=True)
+
+    write_json_atomic(
+        sidecar_path,
+        {
+            "schema_version": HOURLY_LPI_SCHEMA_VERSION,
+            "run_stamp": run.stamp,
+            "forecast_hour": fhour,
+            "valid_time_utc": utc_iso(valid_time),
+            "formula_version": formula_version,
+            "grid_hash": grid_hash,
+            "shape": list(sampled_lat.shape),
+            "field_count": len(HOURLY_LPI_INGREDIENT_SPECS),
+            "clipped_counts": clipped_counts,
+            "bytes": out_path.stat().st_size,
+            "sha256": sha256_file(out_path),
+            "created_at_utc": utc_iso(dt.datetime.now(dt.timezone.utc)),
+        },
+    )
+    _update_hourly_lpi_manifest(root, run, grid_hash)
+    return out_path
+
+
 def archive_lpi_baseline_hour(root: Path, run: hrdps.RunInfo, cache_path: Path, fhour: int) -> Path:
-    if not should_archive_model_run("continental", run.cycle):
+    if not should_archive_hourly_lpi_run("continental", run.cycle):
         raise ValueError(f"Run {run.stamp} is not an eligible LPI baseline archive cycle.")
     root = ensure_archive_root(root)
     out_path = baseline_hour_archive_path(root, run.stamp, fhour)
@@ -706,6 +878,31 @@ def run_archive_complete(root: Path, stamp: str) -> bool:
     return all(model_hour_archive_path(root, stamp, hour).exists() for hour in MODEL_FORECAST_HOURS)
 
 
+def hourly_lpi_run_complete(root: Path, stamp: str) -> bool:
+    manifest_path = hourly_lpi_run_archive_dir(root, stamp) / "manifest.json"
+    if not manifest_path.exists():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text())
+    except (OSError, json.JSONDecodeError):
+        return False
+    return bool(manifest.get("complete")) and all(
+        hourly_lpi_hour_archive_path(root, stamp, hour).exists() for hour in HOURLY_LPI_FORECAST_HOURS
+    )
+
+
+def baseline_lpi_run_complete(root: Path, stamp: str) -> bool:
+    return all(baseline_hour_archive_path(root, stamp, hour).exists() for hour in MODEL_FORECAST_HOURS)
+
+
+def required_run_archives_complete(root: Path, model_key: str, cycle: str, stamp: str) -> bool:
+    if should_archive_model_run(model_key, cycle) and not run_archive_complete(root, stamp):
+        return False
+    if should_archive_hourly_lpi_run(model_key, cycle):
+        return hourly_lpi_run_complete(root, stamp) and baseline_lpi_run_complete(root, stamp)
+    return True
+
+
 def archive_status(root: Path) -> dict[str, object]:
     obs_dir = observation_archive_dir(root)
     model_dir = model_archive_dir(root)
@@ -714,6 +911,9 @@ def archive_status(root: Path) -> dict[str, object]:
     model_hours = sorted(model_dir.glob("*/*/f*.npz")) if model_dir.exists() else []
     baseline_dir = baseline_archive_dir(root)
     baseline_hours = sorted(baseline_dir.glob("*/*/f*.npz")) if baseline_dir.exists() else []
+    hourly_dir = hourly_lpi_archive_dir(root)
+    hourly_manifests = sorted(hourly_dir.glob("*/*/manifest.json")) if hourly_dir.exists() else []
+    hourly_hours = sorted(hourly_dir.glob("*/*/f*.npz")) if hourly_dir.exists() else []
     complete_runs = 0
     latest_run = None
     for path in manifests:
@@ -725,7 +925,22 @@ def archive_status(root: Path) -> dict[str, object]:
         stamp = payload.get("run_stamp")
         if isinstance(stamp, str) and (latest_run is None or stamp > latest_run):
             latest_run = stamp
+    complete_hourly_runs = 0
+    latest_hourly_run = None
+    for path in hourly_manifests:
+        try:
+            payload = json.loads(path.read_text())
+        except (OSError, json.JSONDecodeError):
+            continue
+        complete_hourly_runs += bool(payload.get("complete"))
+        stamp = payload.get("run_stamp")
+        if isinstance(stamp, str) and (latest_hourly_run is None or stamp > latest_hourly_run):
+            latest_hourly_run = stamp
     usage = shutil.disk_usage(root) if root.exists() else None
+    observation_bytes = sum(path.stat().st_size for path in obs_paths)
+    model_bytes = sum(path.stat().st_size for path in model_hours)
+    baseline_bytes = sum(path.stat().st_size for path in baseline_hours)
+    hourly_lpi_bytes = sum(path.stat().st_size for path in hourly_hours)
     return {
         "schema_version": ARCHIVE_SCHEMA_VERSION,
         "archive_root": str(root),
@@ -735,8 +950,16 @@ def archive_status(root: Path) -> dict[str, object]:
         "complete_model_runs": complete_runs,
         "model_hours": len(model_hours),
         "baseline_lpi_hours": len(baseline_hours),
+        "hourly_lpi_runs": len(hourly_manifests),
+        "complete_hourly_lpi_runs": complete_hourly_runs,
+        "hourly_lpi_hours": len(hourly_hours),
+        "latest_hourly_lpi_run": latest_hourly_run,
         "latest_model_run": latest_run,
-        "archive_bytes": sum(path.stat().st_size for path in (*obs_paths, *model_hours, *baseline_hours)),
+        "observation_bytes": observation_bytes,
+        "model_bytes": model_bytes,
+        "baseline_lpi_bytes": baseline_bytes,
+        "hourly_lpi_bytes": hourly_lpi_bytes,
+        "archive_bytes": observation_bytes + model_bytes + baseline_bytes + hourly_lpi_bytes,
         "filesystem_free_bytes": usage.free if usage else None,
         "updated_at_utc": utc_iso(dt.datetime.now(dt.timezone.utc)),
     }

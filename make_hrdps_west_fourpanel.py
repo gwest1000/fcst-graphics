@@ -119,7 +119,7 @@ TERRAIN_COLORS = [
     "#281411",
 ]
 TRANSMISSION_PANEL_INDICES = (1, 3)
-CONTINENTAL_FOURPANEL_EXTENT = (-141.0, -106.7, 45.5, 59.8)
+CONTINENTAL_FOURPANEL_EXTENT = (-139.6, -105.3, 45.5, 59.8)
 
 
 def fourpanel_extent() -> tuple[float, float, float, float]:
@@ -655,7 +655,7 @@ def plot_fourpanel(
         sigma=sigma_for_km(LI_SMOOTHING_KM),
     )
     li_levels = [-6, -4, -2, 0]
-    li_colors = ["#7b3294", "#d7191c", "#f28e2b", "black"]
+    li_colors = ["#d000b8", "#d7191c", "#f28e2b", "black"]
     li_ct = ax.contour(
         clon,
         clat,

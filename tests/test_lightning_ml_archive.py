@@ -5,6 +5,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
 import numpy as np
@@ -99,6 +100,9 @@ class ModelArchiveTest(unittest.TestCase):
         self.assertTrue(archive.should_archive_model_run("continental", "12"))
         self.assertFalse(archive.should_archive_model_run("continental", "06"))
         self.assertFalse(archive.should_archive_model_run("west", "12"))
+        for cycle in ("00", "06", "12", "18"):
+            self.assertTrue(archive.should_archive_hourly_lpi_run("continental", cycle))
+        self.assertFalse(archive.should_archive_hourly_lpi_run("west", "12"))
 
     def test_pack_round_trip_and_missing_value(self) -> None:
         spec = archive.FieldSpec("temperature", "TMP", "Sfc", "K", 273.15, 0.05)
@@ -117,7 +121,7 @@ class ModelArchiveTest(unittest.TestCase):
         self.assertIn("precip_rate", later_keys)
         self.assertIn("precip_accum", later_keys)
 
-    def test_cleanup_preserves_unarchived_twice_daily_run(self) -> None:
+    def test_cleanup_preserves_any_continental_run_with_incomplete_archives(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             data_dir = root / "data"
@@ -130,8 +134,52 @@ class ModelArchiveTest(unittest.TestCase):
             finally:
                 automation.convective.set_model(original_model)
             self.assertTrue((data_dir / "20260710T00Z").exists())
-            self.assertFalse((data_dir / "20260710T06Z").exists())
+            self.assertTrue((data_dir / "20260710T06Z").exists())
             self.assertTrue((data_dir / "20260710T12Z").exists())
+
+    def test_hourly_lpi_archive_packs_raw_tuning_ingredients(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir) / "archive"
+            run = archive.hrdps.RunInfo(
+                cycle="06",
+                stamp="20260710T06Z",
+                init_time=dt.datetime(2026, 7, 10, 6, tzinfo=UTC),
+            )
+            lat = np.arange(16, dtype=np.float32).reshape(4, 4) + 45.0
+            lon = np.arange(16, dtype=np.float32).reshape(4, 4) - 140.0
+            fields = SimpleNamespace(
+                **{
+                    spec.attribute: np.full((4, 4), index + 0.25, dtype=np.float32)
+                    for index, spec in enumerate(archive.HOURLY_LPI_INGREDIENT_SPECS)
+                }
+            )
+
+            output = archive.archive_hourly_lpi_ingredients(
+                root,
+                run,
+                1,
+                lat,
+                lon,
+                fields,
+                stride=2,
+                formula_version="test_formula",
+            )
+
+            self.assertTrue(output.exists())
+            sidecar = json.loads(output.with_suffix(".json").read_text())
+            self.assertEqual(sidecar["shape"], [2, 2])
+            self.assertEqual(sidecar["formula_version"], "test_formula")
+            with np.load(output) as packed:
+                self.assertEqual(int(packed["forecast_hour"][0]), 1)
+                self.assertEqual(str(packed["formula_version"].item()), "test_formula")
+                self.assertEqual(packed["mu_li"].shape, (2, 2))
+            manifest = json.loads((output.parent / "manifest.json").read_text())
+            self.assertEqual(manifest["archived_hours"], [1])
+            self.assertFalse(manifest["complete"])
+
+    def test_hourly_precipitation_rate_range_covers_extreme_convection(self) -> None:
+        spec = next(spec for spec in archive.HOURLY_LPI_INGREDIENT_SPECS if spec.key == "precip_rate")
+        self.assertGreaterEqual(32767 * spec.scale + spec.offset, 300.0)
 
 
 if __name__ == "__main__":

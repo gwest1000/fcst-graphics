@@ -43,6 +43,7 @@ MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
     "continental": (
         "continental_fourpanel",
         "continental_lightning_twopanel",
+        "continental_temperature",
         "continental_fwi2025_danger",
         "continental_lightning_verif",
         "fire_danger_verif",
@@ -51,6 +52,9 @@ MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
         "lightning_sw",
         "lightning_se",
         "lightning_ne",
+        "temperature_sw",
+        "temperature_se",
+        "temperature_ne",
         "fwi2025_danger",
         "lightning_verif",
     ),

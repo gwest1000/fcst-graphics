@@ -7,6 +7,10 @@ Operational forecast-map generation and publication for:
 - GEFS control
 - ECMWF IFS control
 
+The HRDPS surface products include three-hourly 2 m temperature for the
+BC-wide HRDPS 2.5 km domain and the southwest, southeast, and northeast
+HRDPS-West 1 km regional domains.
+
 The model jobs are managed independently. They share plotting code, but each has
 its own run locks, status, R2 upload state, and publication worker. GitHub Pages
 serves the static viewer in `site/`; forecast imagery and run manifests are
