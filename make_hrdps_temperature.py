@@ -108,8 +108,8 @@ class RegionConfig:
 
 TEMPERATURE_REGIONS = {
     "bc": RegionConfig("bc", "BC", (-138.2, -109.5, 46.0, 58.45)),
-    "south": RegionConfig("south", "Southern BC", (-130.5, -113.0, 48.0, 54.5)),
-    "north": RegionConfig("north", "Northern BC", (-132.0, -113.5, 51.7, 59.2)),
+    "south": RegionConfig("south", "Southern BC", (-129.5, -113.1, 48.0, 54.08)),
+    "north": RegionConfig("north", "Northern BC", (-133.06, -112.44, 51.7, 59.2)),
 }
 
 
