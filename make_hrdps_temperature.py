@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import warnings
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -18,7 +19,6 @@ import numpy as np
 from shapely.geometry.base import BaseGeometry
 
 import make_hrdps_west_convective as hrdps
-import make_hrdps_west_lightning as lightning
 import plot_style
 from make_hrdps_west_fourpanel import smooth_nan
 
@@ -99,14 +99,27 @@ REGION_KEYS_BY_MODEL = {
 }
 
 
+@dataclass(frozen=True)
+class RegionConfig:
+    key: str
+    label: str
+    extent: tuple[float, float, float, float]
+
+
+TEMPERATURE_REGIONS = {
+    "bc": RegionConfig("bc", "BC", (-138.2, -109.5, 46.0, 58.45)),
+    "sw": RegionConfig("sw", "Southwest BC", (-128.5, -120.0, 48.0, 52.5)),
+    "se": RegionConfig("se", "Southeast BC", (-121.25, -112.0, 48.4, 53.25)),
+    "ne": RegionConfig("ne", "Northeast BC", (-130.0, -115.5, 51.7, 59.2)),
+}
+
+
 def log(message: str) -> None:
     print(message, flush=True)
 
 
 def set_model(model_key: str) -> hrdps.ModelConfig:
-    config = hrdps.set_model(model_key)
-    lightning.set_model(model_key)
-    return config
+    return hrdps.set_model(model_key)
 
 
 def region_keys_for_model(model_key: str) -> tuple[str, ...]:
@@ -119,6 +132,13 @@ def region_keys_for_model(model_key: str) -> tuple[str, ...]:
 def output_prefix(region_key: str) -> str:
     prefix = hrdps.model_output_prefix("temperature")
     return prefix if region_key == "bc" else f"{prefix}_{region_key}"
+
+
+def region_config(region_key: str) -> RegionConfig:
+    try:
+        return TEMPERATURE_REGIONS[region_key]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported temperature region: {region_key}") from exc
 
 
 def required_names(stamp: str, fhour: int) -> tuple[str, ...]:
@@ -147,7 +167,7 @@ def add_full_canvas_text(
     plot_style.add_single_panel_text(
         overlay,
         plot_style.valid_header(run, fhour, model_label=hrdps.model_config().label),
-        f"2 m temperature (shaded, °C); grey isotherms every 10°C; {region_label}",
+        f"2 m temperature (shaded, °C); grey isotherms every 10°C; blue BCH watersheds; {region_label}",
         run,
         source_label=hrdps.model_config().source_label,
     )
@@ -162,12 +182,11 @@ def render_temperature(
     temperature_c: np.ndarray,
     region_key: str,
     watersheds: list[BaseGeometry],
-    transmission_lines: list[BaseGeometry],
     shade_stride: int,
     contour_stride: int,
 ) -> None:
-    region = lightning.region_config(region_key)
-    extent = lightning.region_extent(region)
+    region = region_config(region_key)
+    extent = region.extent
     yslice, xslice = hrdps.subset_slices(lat, lon, extent)
     plot_lat = lat[yslice, xslice]
     plot_lon = lon[yslice, xslice]
@@ -196,7 +215,6 @@ def render_temperature(
         )
 
     hrdps.add_hydro_features(ax)
-    lightning.add_transmission_lines(ax, transmission_lines)
     hrdps.add_watersheds(ax, watersheds)
 
     contour_sample = (slice(None, None, contour_stride), slice(None, None, contour_stride))
@@ -254,7 +272,6 @@ def make_plots(
     contour_stride: int | None = None,
     watershed_cache: Path = WATERSHED_CACHE,
     no_watersheds: bool = False,
-    no_transmission: bool = False,
 ) -> list[Path]:
     hours = tuple(sorted(set(int(hour) for hour in hours)))
     region_keys = tuple(region_keys or region_keys_for_model(hrdps.model_config().key))
@@ -263,8 +280,8 @@ def make_plots(
 
     shade_stride = shade_stride or hrdps.grid_stride(SHADE_TARGET_KM)
     contour_stride = contour_stride or hrdps.grid_stride(CONTOUR_TARGET_KM)
-    regions = tuple(lightning.region_config(key) for key in region_keys)
-    extents = tuple(lightning.region_extent(region) for region in regions)
+    regions = tuple(region_config(key) for key in region_keys)
+    extents = tuple(region.extent for region in regions)
     union_extent = (
         min(extent[0] for extent in extents),
         max(extent[1] for extent in extents),
@@ -275,11 +292,6 @@ def make_plots(
         []
         if no_watersheds
         else hrdps.load_watersheds(watershed_cache, extent=union_extent)
-    )
-    transmission_lines = (
-        []
-        if no_transmission
-        else lightning.load_transmission_lines(extent=union_extent)
     )
 
     run_dir = data_dir / run.stamp
@@ -312,7 +324,6 @@ def make_plots(
                 temperature_c,
                 region.key,
                 watersheds,
-                transmission_lines,
                 shade_stride,
                 contour_stride,
             )
@@ -341,7 +352,6 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--shade-stride", type=int, default=None)
     parser.add_argument("--contour-stride", type=int, default=None)
     parser.add_argument("--no-watersheds", action="store_true")
-    parser.add_argument("--no-transmission", action="store_true")
     return parser.parse_args(list(argv))
 
 
@@ -367,7 +377,6 @@ def main(argv: Iterable[str]) -> int:
         args.shade_stride,
         args.contour_stride,
         no_watersheds=args.no_watersheds,
-        no_transmission=args.no_transmission,
     )
     log(f"Rendered {len(outputs)} temperature frame(s).")
     return 0

@@ -63,6 +63,20 @@ class HrdpsTemperatureTests(unittest.TestCase):
             "hrdps_continental_temperature",
         )
 
+    def test_temperature_regions_use_wide_product_specific_domains(self) -> None:
+        self.assertEqual(
+            temperature.region_config("sw").extent,
+            (-128.5, -120.0, 48.0, 52.5),
+        )
+        self.assertEqual(
+            temperature.region_config("se").extent,
+            (-121.25, -112.0, 48.4, 53.25),
+        )
+        self.assertEqual(
+            temperature.region_config("ne").extent,
+            (-130.0, -115.5, 51.7, 59.2),
+        )
+
     def test_temperature_products_are_registered_for_automation_and_r2(self) -> None:
         west_keys = {"temperature_sw", "temperature_se", "temperature_ne"}
         self.assertEqual(set(automation.temperature_product_keys("west")), west_keys)
@@ -105,7 +119,6 @@ class HrdpsTemperatureTests(unittest.TestCase):
                     Path(tmpdir) / "plots",
                     hours=(0,),
                     no_watersheds=True,
-                    no_transmission=True,
                 )
 
         self.assertEqual(read_grib.call_count, 2)
