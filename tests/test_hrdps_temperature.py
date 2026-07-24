@@ -34,7 +34,7 @@ class HrdpsTemperatureTests(unittest.TestCase):
             len(temperature.TEMPERATURE_COLORS),
             len(temperature.TEMPERATURE_LEVELS_C) - 1,
         )
-        self.assertEqual(temperature.TEMPERATURE_TICKS_C, tuple(range(-56, 49, 4)))
+        self.assertEqual(temperature.TEMPERATURE_TICKS_C, tuple(range(-50, 41, 10)))
         self.assertEqual(temperature.ISOTHERM_LEVELS_C, tuple(range(-60, 51, 10)))
 
     def test_reference_palette_places_operational_colors_at_key_temperatures(self) -> None:
@@ -79,6 +79,22 @@ class HrdpsTemperatureTests(unittest.TestCase):
             temperature.region_config("north").extent,
             (-133.06, -112.44, 51.7, 59.2),
         )
+
+    def test_temperature_colorbar_fills_map_height_and_reaches_right_border(self) -> None:
+        backdrop = temperature.TEMPERATURE_COLORBAR_BACKDROP
+        colorbar = temperature.TEMPERATURE_COLORBAR_AX
+        map_height = (
+            1.0
+            - temperature.plot_style.SINGLE_HEADER_BAND_HEIGHT
+            - temperature.plot_style.SINGLE_FOOTER_BAND_HEIGHT
+        )
+
+        self.assertAlmostEqual(backdrop[0] + backdrop[2], 1.0)
+        self.assertAlmostEqual(colorbar[0] + colorbar[2], 0.9955)
+        self.assertAlmostEqual(colorbar[1], temperature.plot_style.SINGLE_FOOTER_BAND_HEIGHT)
+        self.assertAlmostEqual(colorbar[3], map_height)
+        self.assertGreater(temperature.TEMPERATURE_COLORBAR_TICK_FONTSIZE, 6.8)
+        self.assertGreater(temperature.TEMPERATURE_COLORBAR_LEFT_EDGE_WIDTH, 0.0)
 
     def test_temperature_products_are_registered_for_automation_and_r2(self) -> None:
         west_keys = {"temperature_south", "temperature_north"}

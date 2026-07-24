@@ -16,6 +16,8 @@ matplotlib.use("Agg")
 import matplotlib.colors as mcolors
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.lines import Line2D
+from matplotlib.patches import Rectangle
 from shapely.geometry.base import BaseGeometry
 
 import make_hrdps_west_convective as hrdps
@@ -85,13 +87,27 @@ TEMPERATURE_COLORS = (
     "#b0b0b0",
     "#dadada",
 )
-TEMPERATURE_TICKS_C = tuple(range(-56, 49, 4))
+TEMPERATURE_TICKS_C = tuple(range(-50, 41, 10))
 ISOTHERM_LEVELS_C = tuple(range(-60, 51, 10))
 ISOTHERM_COLOR = "#555555"
 ISOTHERM_LINEWIDTH = 0.78
 ISOTHERM_SMOOTHING_KM = 1.5
 SHADE_TARGET_KM = 1.0
 CONTOUR_TARGET_KM = 2.5
+TEMPERATURE_COLORBAR_BACKDROP = (
+    0.961,
+    plot_style.SINGLE_FOOTER_BAND_HEIGHT,
+    0.039,
+    1.0 - plot_style.SINGLE_HEADER_BAND_HEIGHT - plot_style.SINGLE_FOOTER_BAND_HEIGHT,
+)
+TEMPERATURE_COLORBAR_AX = (
+    0.9795,
+    plot_style.SINGLE_FOOTER_BAND_HEIGHT,
+    0.016,
+    1.0 - plot_style.SINGLE_HEADER_BAND_HEIGHT - plot_style.SINGLE_FOOTER_BAND_HEIGHT,
+)
+TEMPERATURE_COLORBAR_TICK_FONTSIZE = 8.0
+TEMPERATURE_COLORBAR_LEFT_EDGE_WIDTH = 0.65
 
 REGION_KEYS_BY_MODEL = {
     "west": ("south", "north"),
@@ -151,6 +167,65 @@ def temperature_cmap() -> tuple[mcolors.Colormap, mcolors.BoundaryNorm]:
     cmap.set_under("#000000")
     cmap.set_over("#ffffff")
     return cmap, mcolors.BoundaryNorm(TEMPERATURE_LEVELS_C, cmap.N)
+
+
+def add_temperature_colorbar(fig: plt.Figure, mappable) -> None:
+    fig.add_artist(
+        Rectangle(
+            TEMPERATURE_COLORBAR_BACKDROP[:2],
+            TEMPERATURE_COLORBAR_BACKDROP[2],
+            TEMPERATURE_COLORBAR_BACKDROP[3],
+            transform=fig.transFigure,
+            facecolor="white",
+            edgecolor="none",
+            linewidth=0.0,
+            zorder=34,
+        )
+    )
+    fig.add_artist(
+        Line2D(
+            [TEMPERATURE_COLORBAR_BACKDROP[0], TEMPERATURE_COLORBAR_BACKDROP[0]],
+            [
+                TEMPERATURE_COLORBAR_BACKDROP[1],
+                TEMPERATURE_COLORBAR_BACKDROP[1] + TEMPERATURE_COLORBAR_BACKDROP[3],
+            ],
+            transform=fig.transFigure,
+            color="black",
+            linewidth=TEMPERATURE_COLORBAR_LEFT_EDGE_WIDTH,
+            zorder=40,
+        )
+    )
+    fig.text(
+        TEMPERATURE_COLORBAR_BACKDROP[0] + 0.0045,
+        TEMPERATURE_COLORBAR_BACKDROP[1] + TEMPERATURE_COLORBAR_BACKDROP[3] - 0.008,
+        "°C",
+        ha="left",
+        va="top",
+        fontsize=8.0,
+        fontweight="bold",
+        color="black",
+        zorder=55,
+    )
+    cax = fig.add_axes(TEMPERATURE_COLORBAR_AX)
+    cax.set_zorder(50)
+    cbar = fig.colorbar(
+        mappable,
+        cax=cax,
+        ticks=TEMPERATURE_TICKS_C,
+        format="%g",
+        extend="both",
+    )
+    cbar.outline.set_edgecolor("black")
+    cbar.outline.set_linewidth(0.75)
+    cbar.ax.yaxis.set_ticks_position("left")
+    cbar.ax.tick_params(
+        labelsize=TEMPERATURE_COLORBAR_TICK_FONTSIZE,
+        length=2.4,
+        width=0.65,
+        pad=1.2,
+        labelleft=True,
+        labelright=False,
+    )
 
 
 def add_full_canvas_text(
@@ -244,16 +319,7 @@ def render_temperature(
         path_width=2.35,
         zorder=30,
     )
-    plot_style.add_internal_colorbar(
-        fig,
-        ax,
-        shaded,
-        ticks=TEMPERATURE_TICKS_C,
-        label="°C",
-        title="2 m TEMP",
-        fmt="%g",
-        extend="both",
-    )
+    add_temperature_colorbar(fig, shaded)
     add_full_canvas_text(fig, run, fhour, region.label)
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
