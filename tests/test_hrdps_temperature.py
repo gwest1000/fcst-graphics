@@ -68,6 +68,10 @@ class HrdpsTemperatureTests(unittest.TestCase):
 
     def test_temperature_regions_use_wide_product_specific_domains(self) -> None:
         self.assertEqual(
+            temperature.region_config("bc").extent,
+            (-138.2, -108.03, 47.55, 60.0),
+        )
+        self.assertEqual(
             temperature.region_config("south").extent,
             (-129.5, -113.1, 48.0, 54.08),
         )
