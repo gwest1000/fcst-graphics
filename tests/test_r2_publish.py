@@ -11,6 +11,7 @@ from r2_publish import (
     PNG_END_MARKER,
     PublishState,
     R2Config,
+    RETIRED_PRODUCTS,
     build_manifest,
     discover_frames,
     is_complete_png,
@@ -118,24 +119,28 @@ class R2PublishTests(unittest.TestCase):
 
     def test_retired_r2_prefixes_are_deleted(self):
         client = mock.Mock()
-        client.list_objects_v2.return_value = {
-            "Contents": [{"Key": "models/west/forecast/convective/old.png"}],
+        client.list_objects_v2.side_effect = lambda **request: {
+            "Contents": [{"Key": f"{request['Prefix']}old.png"}],
             "IsTruncated": False,
         }
         config = R2Config("account", "access", "secret", "bucket", "https://assets.example.com")
 
         deleted = purge_retired_objects(client, config, "west")
 
-        self.assertEqual(deleted, 1)
-        client.list_objects_v2.assert_called_once_with(
-            Bucket="bucket", Prefix="models/west/forecast/convective/"
-        )
-        client.delete_objects.assert_called_once_with(
-            Bucket="bucket",
-            Delete={
-                "Objects": [{"Key": "models/west/forecast/convective/old.png"}],
-                "Quiet": True,
+        self.assertEqual(deleted, len(RETIRED_PRODUCTS["west"]))
+        self.assertEqual(
+            {
+                call.kwargs["Prefix"]
+                for call in client.list_objects_v2.call_args_list
             },
+            {
+                f"models/west/forecast/{product_key}/"
+                for product_key in RETIRED_PRODUCTS["west"]
+            },
+        )
+        self.assertEqual(
+            client.delete_objects.call_count,
+            len(RETIRED_PRODUCTS["west"]),
         )
 
     def test_retained_sync_filters_each_product_independently(self):

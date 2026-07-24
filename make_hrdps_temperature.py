@@ -94,7 +94,7 @@ SHADE_TARGET_KM = 1.0
 CONTOUR_TARGET_KM = 2.5
 
 REGION_KEYS_BY_MODEL = {
-    "west": ("sw", "se", "ne"),
+    "west": ("south", "north"),
     "continental": ("bc",),
 }
 
@@ -108,9 +108,8 @@ class RegionConfig:
 
 TEMPERATURE_REGIONS = {
     "bc": RegionConfig("bc", "BC", (-138.2, -109.5, 46.0, 58.45)),
-    "sw": RegionConfig("sw", "Southwest BC", (-128.5, -120.0, 48.0, 52.5)),
-    "se": RegionConfig("se", "Southeast BC", (-121.25, -112.0, 48.4, 53.25)),
-    "ne": RegionConfig("ne", "Northeast BC", (-130.0, -115.5, 51.7, 59.2)),
+    "south": RegionConfig("south", "Southern BC", (-130.5, -113.0, 48.0, 54.5)),
+    "north": RegionConfig("north", "Northern BC", (-132.0, -113.5, 51.7, 59.2)),
 }
 
 

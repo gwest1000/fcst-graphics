@@ -52,9 +52,8 @@ MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
         "lightning_sw",
         "lightning_se",
         "lightning_ne",
-        "temperature_sw",
-        "temperature_se",
-        "temperature_ne",
+        "temperature_south",
+        "temperature_north",
         "fwi2025_danger",
         "lightning_verif",
     ),
@@ -71,9 +70,9 @@ DEFAULT_PRODUCTS = {
 
 RETIRED_PRODUCTS: dict[str, tuple[str, ...]] = {
     "continental": ("continental_convective", "continental_lightning"),
-    "west": ("convective",),
+    "west": ("convective", "temperature_sw", "temperature_se", "temperature_ne"),
 }
-RETIRED_PRODUCTS_VERSION = "2026-07-21-v1"
+RETIRED_PRODUCTS_VERSION = "2026-07-24-v2"
 
 
 class R2ConfigurationError(RuntimeError):
