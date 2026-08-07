@@ -11,8 +11,13 @@ AUTOMATION="${REPO_ROOT}/automate_hrdps_west.py"
 ENSEMBLE_RUNNER="${REPO_ROOT}/scripts/launchd/run_ensemble_control_fourpanel.sh"
 LPI_VERIFICATION_AUTOMATION="${REPO_ROOT}/automate_lpi_verification.py"
 FIRE_DANGER_VERIFICATION_AUTOMATION="${REPO_ROOT}/automate_fire_danger_verification.py"
+ONLY_LABEL="${1:-}"
 
 mkdir -p "${AGENT_DIR}" "${LOG_DIR}"
+
+selected() {
+  [[ -z "${ONLY_LABEL}" || "${ONLY_LABEL}" == "$1" ]]
+}
 
 install_agent() {
   local label="$1"
@@ -82,12 +87,12 @@ PLIST
   launchctl enable "gui/${UID}/${label}"
 }
 
-install_agent "com.greg.hrdps-west-convective-00" "west" "00" "17" "30" "690" "900" "hrdps_west_00"
-install_agent "com.greg.hrdps-west-convective-12" "west" "12" "5" "30" "690" "900" "hrdps_west_12"
-install_agent "com.greg.hrdps-continental-00" "continental" "00" "17" "30" "360" "540" "hrdps_continental_00"
-install_agent "com.greg.hrdps-continental-06" "continental" "06" "23" "30" "360" "540" "hrdps_continental_06"
-install_agent "com.greg.hrdps-continental-12" "continental" "12" "5" "30" "360" "540" "hrdps_continental_12"
-install_agent "com.greg.hrdps-continental-18" "continental" "18" "11" "30" "360" "540" "hrdps_continental_18"
+selected "com.greg.hrdps-west-convective-00" && install_agent "com.greg.hrdps-west-convective-00" "west" "00" "17" "30" "690" "900" "hrdps_west_00"
+selected "com.greg.hrdps-west-convective-12" && install_agent "com.greg.hrdps-west-convective-12" "west" "12" "5" "30" "690" "900" "hrdps_west_12"
+selected "com.greg.hrdps-continental-00" && install_agent "com.greg.hrdps-continental-00" "continental" "00" "17" "30" "360" "540" "hrdps_continental_00"
+selected "com.greg.hrdps-continental-06" && install_agent "com.greg.hrdps-continental-06" "continental" "06" "23" "30" "360" "540" "hrdps_continental_06"
+selected "com.greg.hrdps-continental-12" && install_agent "com.greg.hrdps-continental-12" "continental" "12" "5" "30" "360" "540" "hrdps_continental_12"
+selected "com.greg.hrdps-continental-18" && install_agent "com.greg.hrdps-continental-18" "continental" "18" "11" "30" "360" "540" "hrdps_continental_18"
 
 install_ensemble_agent() {
   local label="$1"
@@ -151,8 +156,9 @@ PLIST
   launchctl enable "gui/${UID}/${label}"
 }
 
-install_ensemble_agent "com.greg.gefs-control-fourpanel-00" "gefs_control" "0" "5" "0" "gefs_control_00"
-install_ensemble_agent "com.greg.ecmwf-control-fourpanel-00" "ecmwf_control" "0" "5" "30" "ecmwf_control_00"
+selected "com.greg.gefs-control-fourpanel-00" && install_ensemble_agent "com.greg.gefs-control-fourpanel-00" "gefs_control" "0" "5" "0" "gefs_control_00"
+selected "com.greg.ecmwf-control-fourpanel-00" && install_ensemble_agent "com.greg.ecmwf-control-fourpanel-00" "ecmwf_control" "0" "5" "30" "ecmwf_control_00"
+selected "com.greg.ecmwf-control-fourpanel-12" && install_ensemble_agent "com.greg.ecmwf-control-fourpanel-12" "ecmwf_control" "12" "13" "0" "ecmwf_control_12"
 
 install_interval_agent() {
   local label="$1"
@@ -205,9 +211,11 @@ PLIST
   launchctl enable "gui/${UID}/${label}"
 }
 
-install_interval_agent "com.greg.lpi-verification" "600" "${LPI_VERIFICATION_AUTOMATION}" "lpi_verification"
-install_interval_agent "com.greg.fire-danger-verification" "1800" "${FIRE_DANGER_VERIFICATION_AUTOMATION}" "fire_danger_verification"
+selected "com.greg.lpi-verification" && install_interval_agent "com.greg.lpi-verification" "600" "${LPI_VERIFICATION_AUTOMATION}" "lpi_verification"
+selected "com.greg.fire-danger-verification" && install_interval_agent "com.greg.fire-danger-verification" "1800" "${FIRE_DANGER_VERIFICATION_AUTOMATION}" "fire_danger_verification"
 
-"${SCRIPT_DIR}/install_r2_launch_agents.sh"
+if [[ -z "${ONLY_LABEL}" ]]; then
+  "${SCRIPT_DIR}/install_r2_launch_agents.sh"
+fi
 
 launchctl print "gui/${UID}" | grep 'com.greg' || true

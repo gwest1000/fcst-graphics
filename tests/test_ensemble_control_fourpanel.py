@@ -19,7 +19,12 @@ class FakeEcmwfProvider(ensemble.EcmwfProvider):
         pass
 
     def surface(self, fhour: int, short_name: str, level_type: str, level: int = 0) -> ensemble.Field:
-        values = {0: (0.001, "0"), 3: (0.004, "0-3")}
+        values = {
+            0: (0.001, "0"),
+            3: (0.004, "0-3"),
+            144: (0.100, "0-144"),
+            150: (0.106, "0-150"),
+        }
         value, step_range = values[fhour]
         return field(value, step_range)
 
@@ -41,6 +46,32 @@ class EnsembleControlFourPanelTest(unittest.TestCase):
         precip = FakeEcmwfProvider().precip(3)
 
         np.testing.assert_allclose(precip.data, 4.0)
+
+    def test_ecmwf_precip_switches_to_six_hour_accumulations_after_f144(self) -> None:
+        precip = FakeEcmwfProvider().precip(150)
+
+        np.testing.assert_allclose(precip.data, 6.0, atol=1.0e-5)
+
+    def test_ecmwf_forecast_schedule_reaches_ten_and_a_half_days(self) -> None:
+        hours = ensemble.model_hours("ecmwf_control")
+
+        self.assertEqual(hours[0], 0)
+        self.assertEqual(hours[-1], 252)
+        self.assertIn(144, hours)
+        self.assertIn(150, hours)
+        self.assertNotIn(147, hours)
+        self.assertTrue(all(b - a == 3 for a, b in zip(hours, hours[1:]) if b <= 144))
+        self.assertTrue(all(b - a == 6 for a, b in zip(hours, hours[1:]) if a >= 144))
+
+    def test_ecmwf_geopotential_is_converted_to_height_metres(self) -> None:
+        geopotential = field(2.0 * ensemble.GRAVITY)
+
+        terrain = ensemble.geopotential_height_m(geopotential)
+
+        np.testing.assert_allclose(terrain.data, 2.0)
+
+    def test_ecmwf_source_label_is_concise(self) -> None:
+        self.assertEqual(ensemble.MODEL_CONFIGS["ecmwf_control"].source_label, "ECMWF")
 
     def test_ecmwf_vector_density_is_25_percent_above_gefs(self) -> None:
         gefs = ensemble.MODEL_CONFIGS["gefs_control"]

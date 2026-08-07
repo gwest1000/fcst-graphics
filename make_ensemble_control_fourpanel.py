@@ -37,10 +37,17 @@ from make_hrdps_west_fourpanel import (
     make_ipw_cmap,
     make_precip_cmap,
     make_rh_cmap,
+    make_terrain_cmap,
     plot_barbs,
 )
 
-FORECAST_HOURS = tuple(range(0, 49, 3))
+ECMWF_THREE_HOURLY_END = 144
+ECMWF_FORECAST_END = 252
+ECMWF_FORECAST_HOURS = (
+    tuple(range(0, ECMWF_THREE_HOURLY_END + 1, 3))
+    + tuple(range(ECMWF_THREE_HOURLY_END + 6, ECMWF_FORECAST_END + 1, 6))
+)
+FORECAST_HOURS = ECMWF_FORECAST_HOURS
 GEFS_FORECAST_HOURS = tuple(range(3, 49, 3))
 EXTENT = (-138.7, -109.0, 46.0, 58.45)
 CONCRETE_REPO = Path("/Users/greg/projects/concrete_fcst")
@@ -81,7 +88,7 @@ MODEL_CONFIGS = {
     "ecmwf_control": ModelConfig(
         key="ecmwf_control",
         label="ECMWF IFS Control",
-        source_label="ECMWF Open Data control",
+        source_label="ECMWF",
         output_prefix="ecmwf_control",
         default_output_dir="plots/ecmwf_control_fourpanel",
         resolution_km=28.0,
@@ -233,6 +240,10 @@ def field_like(reference: Field, data: np.ndarray, step_range: str = "") -> Fiel
     return Field(data=data.astype(np.float32), lat=reference.lat, lon=reference.lon, step_range=step_range)
 
 
+def geopotential_height_m(field: Field) -> Field:
+    return field_like(field, field.data / GRAVITY, field.step_range)
+
+
 def regular_grid_absv(u: Field, v: Field) -> Field:
     lon_rad = np.deg2rad(u.lon.astype(np.float64))
     lat_rad = np.deg2rad(u.lat.astype(np.float64))
@@ -258,7 +269,7 @@ def regular_grid_absv(u: Field, v: Field) -> Field:
     return field_like(u, absv)
 
 
-def precip_3h(current: Field, previous: Field | None, fhour: int) -> Field:
+def period_precip(current: Field, previous: Field | None, interval_hours: int) -> Field:
     data = np.maximum(current.data, 0.0)
     current_range = parse_step_range(current.step_range)
     previous_range = parse_step_range(previous.step_range) if previous is not None else None
@@ -270,13 +281,13 @@ def precip_3h(current: Field, previous: Field | None, fhour: int) -> Field:
             current_start, current_end = current_range
             previous_start, previous_end = previous_range
             should_subtract = (
-                current_end - current_start > 3
+                current_end - current_start > interval_hours
                 and previous_start == current_start
                 and previous_end < current_end
             )
         else:
             current_start, current_end = current_range
-            should_subtract = current_start == 0 and current_end > 3
+            should_subtract = current_start == 0 and current_end > interval_hours
     if should_subtract:
         data = np.maximum(current.data - previous.data, 0.0)
     return field_like(current, data, current.step_range)
@@ -435,15 +446,22 @@ class BaseProvider:
     def surface_pressure_hpa(self, fhour: int) -> Field | None:
         return None
 
+    def terrain(self) -> Field | None:
+        return None
+
+    def precip_interval_hours(self, fhour: int) -> int:
+        return 3
+
     def precip(self, fhour: int) -> Field:
+        interval_hours = self.precip_interval_hours(fhour)
         current = self.surface(fhour, "tp", "surface", 0)
         previous = None
         if fhour > 0:
             try:
-                previous = self.surface(fhour - 3, "tp", "surface", 0)
+                previous = self.surface(fhour - interval_hours, "tp", "surface", 0)
             except Exception:
                 previous = None
-        return precip_3h(current, previous, fhour)
+        return period_precip(current, previous, interval_hours)
 
 
 class EcmwfProvider(BaseProvider):
@@ -463,8 +481,17 @@ class EcmwfProvider(BaseProvider):
             return None
         return field_like(psfc, psfc.data / 100.0)
 
+    def terrain(self) -> Field:
+        geopotential = crop_extent(
+            read_matching_grib(self.cycle_root() / "terrain_cf.grib2", "z", "surface", 0, 0)
+        )
+        return geopotential_height_m(geopotential)
+
     def cape(self, fhour: int, reference: Field) -> Field | None:
         return None
+
+    def precip_interval_hours(self, fhour: int) -> int:
+        return 3 if fhour <= ECMWF_THREE_HOURLY_END else 6
 
     def precip(self, fhour: int) -> Field:
         precip_metres = super().precip(fhour)
@@ -527,6 +554,8 @@ def provider_for(model: str, data_root: Path, run: RunInfo) -> BaseProvider:
 def required_files_present(model: str, data_root: Path, run: RunInfo, hours: Iterable[int]) -> bool:
     provider = provider_for(model, data_root, run)
     try:
+        if model == "ecmwf_control":
+            provider.terrain()
         for fhour in hours:
             provider.pressure(fhour, "gh", 500)
             provider.pressure(fhour, "u", 500)
@@ -572,22 +601,39 @@ def ensure_downloads(
             include_labels.append("surface_cf")
         if force or not (cycle_root / "pl_cf.grib2").exists():
             include_labels.append("pressure_cf")
-        if not include_labels:
-            return
-        cmd = [
-            str(python),
-            "-m",
-            "concrete_fcst.cli",
-            "download-ecmwf-realtime",
-            "--repo-root",
-            str(concrete_repo),
-            "--date",
-            f"{run.init_time:%Y%m%d}",
-            "--cycle",
-            str(int(run.cycle)),
-            "--include",
-            *include_labels,
-        ]
+        if include_labels:
+            cmd = [
+                str(python),
+                "-m",
+                "concrete_fcst.cli",
+                "download-ecmwf-realtime",
+                "--repo-root",
+                str(concrete_repo),
+                "--date",
+                f"{run.init_time:%Y%m%d}",
+                "--cycle",
+                str(int(run.cycle)),
+                "--include",
+                *include_labels,
+            ]
+            log("Running data download: " + " ".join(cmd))
+            subprocess.run(cmd, cwd=concrete_repo, check=True)
+
+        terrain_path = cycle_root / "terrain_cf.grib2"
+        if force or not terrain_path.exists():
+            terrain_cmd = [
+                str(python),
+                str(Path(__file__).with_name("download_ecmwf_terrain.py")),
+                "--date",
+                f"{run.init_time:%Y%m%d}",
+                "--cycle",
+                str(int(run.cycle)),
+                "--target",
+                str(terrain_path),
+            ]
+            log("Running terrain download: " + " ".join(terrain_cmd))
+            subprocess.run(terrain_cmd, cwd=concrete_repo, check=True)
+        return
     elif model == "gefs_control":
         cmd = [
             str(python),
@@ -911,12 +957,30 @@ def plot_fourpanel(
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[10, 15, 20, 25, 30, 70, 75, 80, 85, 90], label="%", fmt="%g")
     plot_style.add_fourpanel_text(ax, header, "85.0-70.0kPa RH(%,shaded), 85.0kPa Temp(C,cntrd), 85/70kPa Wind(hlf brb=10km/h)", run, config.source_label)
 
-    # 4) Three-hour precipitation, MSLP, 10 m wind.
+    # 4) Period precipitation, MSLP, 10 m wind.
     ax = axes[3]
     precip = provider.precip(fhour)
     msl = provider.surface(fhour, "msl" if config.key == "ecmwf_control" else "prmsl", "meanSea", 0)
     u10 = provider.surface(fhour, "10u", "heightAboveGround", 10)
     v10 = provider.surface(fhour, "10v", "heightAboveGround", 10)
+    terrain = provider.terrain()
+    terrain_footer = ""
+    if terrain is not None:
+        terrain_cmap, terrain_norm, terrain_levels = make_terrain_cmap()
+        terrain_land = np.where(terrain.data > 0.5, terrain.data, np.nan)
+        ax.contourf(
+            decimate(terrain.lon, shade_stride),
+            decimate(terrain.lat, shade_stride),
+            decimate(terrain_land, shade_stride),
+            levels=terrain_levels,
+            cmap=terrain_cmap,
+            norm=terrain_norm,
+            extend="max",
+            transform=DATA_CRS,
+            transform_first=True,
+            zorder=1,
+        )
+        terrain_footer = "Topo(brown), "
     cmap, norm, levels = make_precip_cmap()
     cf = ax.contourf(
         decimate(precip.lon, shade_stride),
@@ -953,7 +1017,14 @@ def plot_fourpanel(
     )
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[0.25, 2, 4, 6, 8, 10, 15, 20, 25, 35, 45, 60, 80, 100], label="mm", fmt="%g")
-    plot_style.add_fourpanel_text(ax, header, "3h Precip(shaded,mm), MSLP(cntrd,kPa), and 10m Wind(hlf brb=10km/h)", run, config.source_label)
+    precip_hours = provider.precip_interval_hours(fhour)
+    plot_style.add_fourpanel_text(
+        ax,
+        header,
+        f"{terrain_footer}{precip_hours}h Precip(shaded,mm), MSLP(cntrd,kPa), and 10m Wind(hlf brb=10km/h)",
+        run,
+        config.source_label,
+    )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, facecolor="white")
@@ -971,10 +1042,10 @@ def make_plots(
     shade_stride: int | None = None,
     contour_stride: int | None = None,
     barb_stride: int | None = None,
-    hours: Iterable[int] = FORECAST_HOURS,
+    hours: Iterable[int] | None = None,
 ) -> list[Path]:
     config = MODEL_CONFIGS[model]
-    hours = tuple(int(hour) for hour in hours)
+    hours = model_hours(model) if hours is None else tuple(int(hour) for hour in hours)
     if not hours:
         return []
     provider = provider_for(model, data_root, run)

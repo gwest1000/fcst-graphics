@@ -30,7 +30,11 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--pages-repo", type=Path, default=DEFAULT_PAGES_REPO)
     parser.add_argument("--keep-days", type=int, default=7)
-    parser.add_argument("--hours", default=None, help="Comma-separated forecast hours. Defaults to 0..48 every 3h.")
+    parser.add_argument(
+        "--hours",
+        default=None,
+        help="Comma-separated forecast hours. Defaults to each model's operational plotting schedule.",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--force-download", action="store_true")
     parser.add_argument("--max-runtime-minutes", type=int, default=360)

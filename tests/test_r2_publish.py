@@ -18,10 +18,14 @@ from r2_publish import (
     object_key_for,
     purge_retired_objects,
 )
-from publish_hrdps_west import PRODUCTS, image_name_for_hour
+from publish_hrdps_west import PRODUCTS, image_name_for_hour, minimum_manifest_hours
 
 
 class R2PublishTests(unittest.TestCase):
+    def test_extended_ecmwf_product_retains_legacy_complete_runs(self):
+        self.assertEqual(PRODUCTS["ecmwf_control_fourpanel"].hours[-1], 252)
+        self.assertEqual(minimum_manifest_hours("ecmwf_control_fourpanel"), 17)
+
     def test_object_keys_separate_retention_classes(self):
         forecast = object_key_for("west", "lightning_sw", "20260720T12Z", "frame.png")
         verification = object_key_for("west", "lightning_verif", "20260720T12Z", "frame.png")
