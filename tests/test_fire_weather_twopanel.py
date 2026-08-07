@@ -166,8 +166,8 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         self.assertEqual(twopanel.ACTIVE_FIRE_OUTLINE_COLOR, "#111111")
         self.assertLess(twopanel.ACTIVE_FIRE_AREA, 38.0)
         self.assertGreater(twopanel.FIRE_OF_NOTE_AREA, 70.0)
-        self.assertGreater(twopanel.FIRE_OF_NOTE_HALO_AREA, twopanel.FIRE_OF_NOTE_AREA)
-        self.assertEqual(twopanel.FIRE_OF_NOTE_HALO_COLOR, "#fff0a3")
+        self.assertGreater(twopanel.FIRE_OF_NOTE_HALO_AREA, twopanel.FIRE_OF_NOTE_AREA * 1.8)
+        self.assertEqual(twopanel.FIRE_OF_NOTE_HALO_COLOR, "#ffe45c")
 
     def test_projection_is_clockwise_and_projected_crop_is_portrait(self):
         self.assertEqual(twopanel.PLOT_CRS.proj4_params["lon_0"], -98.0)
