@@ -112,7 +112,9 @@ REGIONAL_PRECIP_DOT_AREA_MULTIPLIER = 1.25
 ACTIVE_FIRE_COLOR = "#ff815c"
 ACTIVE_FIRE_OUTLINE_COLOR = "#111111"
 ACTIVE_FIRE_AREA = 31.0
-FIRE_OF_NOTE_AREA = 70.0
+FIRE_OF_NOTE_AREA = 84.0
+FIRE_OF_NOTE_HALO_AREA = 116.0
+FIRE_OF_NOTE_HALO_COLOR = "#fff0a3"
 HOTSPOT_COLOR = "#f28e1c"
 HOTSPOT_MARKER = "s"
 
@@ -361,10 +363,22 @@ def add_fire_activity(
     if activity.is_active_fire_feed:
         regular = [observation for observation in activity.observations if not observation.fire_of_note]
         notes = [observation for observation in activity.observations if observation.fire_of_note]
+        if notes:
+            ax.scatter(
+                [observation.longitude for observation in notes],
+                [observation.latitude for observation in notes],
+                marker=ACTIVE_FIRE_MARKER,
+                s=FIRE_OF_NOTE_HALO_AREA,
+                facecolor=FIRE_OF_NOTE_HALO_COLOR,
+                edgecolors=ACTIVE_FIRE_OUTLINE_COLOR,
+                linewidths=0.58,
+                transform=lightning.DATA_CRS,
+                zorder=35.8,
+            )
         for observations, area in ((regular, ACTIVE_FIRE_AREA), (notes, FIRE_OF_NOTE_AREA)):
             if not observations:
                 continue
-            points = ax.scatter(
+            ax.scatter(
                 [observation.longitude for observation in observations],
                 [observation.latitude for observation in observations],
                 marker=ACTIVE_FIRE_MARKER,
@@ -689,7 +703,7 @@ def plot_twopanel(
     for ax in (rh_ax, lpi_ax):
         lightning.add_transmission_lines(ax, transmission_lines)
         hrdps.add_city_labels(ax, fontsize=6.5, marker_size=2.0, path_width=2.2, zorder=30)
-    add_fire_activity(lpi_ax, fire_observations)
+        add_fire_activity(ax, fire_observations)
 
     plot_style.add_internal_colorbar(
         fig,
@@ -833,7 +847,7 @@ def plot_regional_twopanel(
     for ax in (rh_ax, danger_ax):
         lightning.add_transmission_lines(ax, transmission_lines)
         hrdps.add_city_labels(ax, fontsize=7.1, marker_size=2.2, path_width=2.35, zorder=30)
-    add_fire_activity(danger_ax, fire_observations)
+        add_fire_activity(ax, fire_observations)
 
     colorbar_layout = regional_colorbar_layout(region_key)
     plot_style.add_internal_colorbar(

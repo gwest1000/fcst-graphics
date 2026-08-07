@@ -25,7 +25,7 @@ class FireActivityOverlayTests(unittest.TestCase):
             ),
         )
 
-    def test_overlay_matches_frame_dimensions_and_uses_right_panel(self):
+    def test_overlay_matches_frame_dimensions_and_uses_both_panels(self):
         with TemporaryDirectory() as tmpdir:
             path = overlay.render_overlay(
                 overlay.OVERLAY_SPECS[0],
@@ -38,8 +38,10 @@ class FireActivityOverlayTests(unittest.TestCase):
         self.assertEqual(image.size, (1440, 900))
         y_pixels, x_pixels = np.nonzero(alpha)
         self.assertGreater(len(x_pixels), 0)
-        self.assertGreater(x_pixels.min(), 700)
-        self.assertEqual(alpha[:, :700].max(), 0)
+        self.assertLess(x_pixels.min(), 700)
+        self.assertGreater(x_pixels.max(), 740)
+        self.assertGreater(alpha[:, :700].max(), 0)
+        self.assertGreater(alpha[:, 740:].max(), 0)
 
     def test_manifest_describes_only_available_live_products(self):
         config = R2Config("account", "access", "secret", "bucket", "https://example.r2.dev")

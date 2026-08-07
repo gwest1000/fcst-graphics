@@ -78,19 +78,22 @@ def _transparent_axes(spec: OverlaySpec):
         dpi=plot_style.PLOT_DPI,
         facecolor=(0.0, 0.0, 0.0, 0.0),
     )
-    ax = fig.add_axes(firewx.EDGE_BAND_PANEL_POSITIONS[1], projection=projection)
-    if spec.region_key == "bc":
-        ax.set_xlim(*firewx.PROJECTED_X_LIMITS)
-        ax.set_ylim(*firewx.PROJECTED_Y_LIMITS)
-    else:
-        ax.set_extent(firewx.REGIONAL_EXTENTS[spec.region_key], crs=lightning.DATA_CRS)
-    ax.patch.set_facecolor("none")
-    ax.patch.set_alpha(0.0)
-    ax.xaxis.set_visible(False)
-    ax.yaxis.set_visible(False)
-    for spine in ax.spines.values():
-        spine.set_visible(False)
-    return fig, ax
+    axes = []
+    for position in firewx.EDGE_BAND_PANEL_POSITIONS:
+        ax = fig.add_axes(position, projection=projection)
+        if spec.region_key == "bc":
+            ax.set_xlim(*firewx.PROJECTED_X_LIMITS)
+            ax.set_ylim(*firewx.PROJECTED_Y_LIMITS)
+        else:
+            ax.set_extent(firewx.REGIONAL_EXTENTS[spec.region_key], crs=lightning.DATA_CRS)
+        ax.patch.set_facecolor("none")
+        ax.patch.set_alpha(0.0)
+        ax.xaxis.set_visible(False)
+        ax.yaxis.set_visible(False)
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        axes.append(ax)
+    return fig, tuple(axes)
 
 
 def render_overlay(
@@ -102,9 +105,10 @@ def render_overlay(
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{spec.product_key}.png"
     temporary_path = output_path.with_name(f".{output_path.stem}.{os.getpid()}.tmp.png")
-    fig, ax = _transparent_axes(spec)
+    fig, axes = _transparent_axes(spec)
     try:
-        firewx.add_fire_activity(ax, activity)
+        for ax in axes:
+            firewx.add_fire_activity(ax, activity)
         fig.savefig(
             temporary_path,
             dpi=plot_style.PLOT_DPI,
