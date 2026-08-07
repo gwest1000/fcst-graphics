@@ -21,6 +21,11 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--stamp", default=None)
     parser.add_argument("--interval-seconds", type=int, default=300)
     parser.add_argument("--sync-retained", action="store_true")
+    parser.add_argument(
+        "--purge-retired",
+        action="store_true",
+        help="Permanently delete objects below configured retired-product prefixes.",
+    )
     parser.add_argument("--once", action="store_true")
     return parser.parse_args(list(argv))
 
@@ -44,7 +49,12 @@ def model_lock(model: str):
 
 def run_once(args: argparse.Namespace) -> bool:
     try:
-        publish_model(args.model, stamp=args.stamp, sync_retained=args.sync_retained or not args.stamp)
+        publish_model(
+            args.model,
+            stamp=args.stamp,
+            sync_retained=args.sync_retained or not args.stamp,
+            purge_retired=args.purge_retired,
+        )
         return True
     except R2ConfigurationError as exc:
         print(f"R2 publisher is not configured: {exc}", flush=True)
@@ -68,4 +78,3 @@ def main(argv: Iterable[str]) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main(__import__("sys").argv[1:]))
-

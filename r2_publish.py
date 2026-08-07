@@ -591,6 +591,7 @@ def publish_model(
     model: str,
     stamp: str | None = None,
     sync_retained: bool = False,
+    purge_retired: bool = False,
     config: R2Config | None = None,
     state_path: Path | None = None,
     client=None,
@@ -606,7 +607,7 @@ def publish_model(
     try:
         retirement_key = f"retired_products:{model}"
         retired_deleted = 0
-        if state.metadata(retirement_key) != RETIRED_PRODUCTS_VERSION:
+        if purge_retired and state.metadata(retirement_key) != RETIRED_PRODUCTS_VERSION:
             retired_deleted = purge_retired_objects(client, config, model)
             state.set_metadata(retirement_key, RETIRED_PRODUCTS_VERSION)
         inactive_pruned = state.prune_inactive_products(model, MODEL_PRODUCTS[model])
