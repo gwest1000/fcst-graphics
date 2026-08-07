@@ -52,6 +52,7 @@ MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
         "lightning_sw",
         "lightning_se",
         "lightning_ne",
+        "wind_sw",
         "temperature_south",
         "temperature_north",
         "fwi2025_danger",

@@ -11,7 +11,9 @@ import automate_hrdps_west as automation
 import fire_activity
 import make_hrdps_fire_weather_twopanel as twopanel
 import make_hrdps_west_lightning as lightning
+import make_hrdps_wind as wind
 import publish_hrdps_west as publisher
+import r2_publish
 
 
 class FireWeatherTwoPanelTests(unittest.TestCase):
@@ -37,10 +39,30 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         self.assertNotIn("lightning", publisher.PRODUCTS)
         self.assertEqual(
             set(automation.lightning_product_keys("west")),
-            {"lightning_sw", "lightning_se", "lightning_ne"},
+            {"lightning_sw", "lightning_se", "lightning_ne", "wind_sw"},
         )
         for key in automation.lightning_product_keys("west"):
-            self.assertEqual(publisher.PRODUCTS[key].plot_type, "Fire Weather")
+            self.assertIn(publisher.PRODUCTS[key].plot_type, {"Fire Weather", "10 m Wind"})
+
+    def test_wind_product_uses_fire_weather_density_and_shared_palette(self):
+        product = publisher.PRODUCTS["wind_sw"]
+
+        self.assertEqual(product.prefix, wind.OUTPUT_PREFIX)
+        self.assertEqual(product.area, "SW BC")
+        self.assertEqual(product.model, "HRDPS-West 1 km")
+        self.assertEqual(wind.ROW_DENSITY_MULTIPLIER, twopanel.REGIONAL_VECTOR_ROW_DENSITY_MULTIPLIER)
+        self.assertEqual(
+            wind.COLUMN_DENSITY_MULTIPLIER,
+            twopanel.REGIONAL_VECTOR_COLUMN_DENSITY_MULTIPLIER,
+        )
+        self.assertGreater(wind.GUST_VECTOR_WIDTH, wind.SUSTAINED_VECTOR_WIDTH)
+        self.assertIn("wind_sw", publisher.PRODUCTS_BY_MODEL["west"])
+        self.assertIn("wind_sw", r2_publish.MODEL_PRODUCTS["west"])
+
+        site_html = (Path(__file__).parents[1] / "site" / "index.html").read_text()
+        self.assertIn('data-plot-toggle="wind"', site_html)
+        self.assertIn('data-area-toggle="wind_sw"', site_html)
+        self.assertIn('data-product-select="wind_sw"', site_html)
 
     def test_product_metadata_and_automation_family(self):
         product = publisher.PRODUCTS["continental_lightning_twopanel"]
@@ -168,6 +190,19 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         self.assertGreater(twopanel.FIRE_OF_NOTE_AREA, 70.0)
         self.assertGreater(twopanel.FIRE_OF_NOTE_HALO_AREA, twopanel.FIRE_OF_NOTE_AREA * 1.8)
         self.assertEqual(twopanel.FIRE_OF_NOTE_HALO_COLOR, "#ffe45c")
+
+    def test_header_distinguishes_weather_and_danger_initializations(self):
+        run = lightning.RunInfo(
+            cycle="12",
+            stamp="20260807T12Z",
+            init_time=dt.datetime(2026, 8, 7, 12, tzinfo=dt.timezone.utc),
+        )
+        danger_init = dt.datetime(2026, 8, 7, 6, tzinfo=dt.timezone.utc)
+
+        label = twopanel.figure_source_label(run, None, danger_init)
+
+        self.assertIn("WX INIT 2026080712Z", label)
+        self.assertIn("DANGER INIT 2026080706Z", label)
 
     def test_projection_is_clockwise_and_projected_crop_is_portrait(self):
         self.assertEqual(twopanel.PLOT_CRS.proj4_params["lon_0"], -98.0)

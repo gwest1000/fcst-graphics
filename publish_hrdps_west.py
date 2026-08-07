@@ -20,6 +20,7 @@ from make_ensemble_control_fourpanel import GEFS_FORECAST_HOURS as GEFS_CONTROL_
 from make_hrdps_west_convective import parse_stamp
 from make_hrdps_west_fourpanel import FORECAST_HOURS as FOURPANEL_FORECAST_HOURS
 from make_hrdps_west_lightning import FORECAST_HOURS as LIGHTNING_FORECAST_HOURS
+from make_hrdps_wind import FORECAST_HOURS as WIND_FORECAST_HOURS
 from make_hrdps_evolved_danger_class import FORECAST_HOURS as FWI2025_DANGER_FORECAST_HOURS
 from make_hrdps_temperature import FORECAST_HOURS as TEMPERATURE_FORECAST_HOURS
 
@@ -76,7 +77,7 @@ PRODUCTS: dict[str, ProductConfig] = {
         plot_type="Experimental Hourly Fire Danger",
         area="BC",
         model="HRDPS-West 1 km",
-        description="Hourly FWI2025 evolution anchored to CWFIS FFMC/DMC/DC, classified with the BC Schedule 2 FWI+BUI danger-region matrices and lightly smoothed over 2 km for display.",
+        description="Hourly FWI2025 evolution anchored to CWFIS FFMC/DMC/DC, with continuous FWI and BUI smoothed over 2 km before classification by the BC Schedule 2 danger-region matrices.",
         hours=FWI2025_DANGER_FORECAST_HOURS,
         archive_subdir="fwi2025_danger",
         model_key="west",
@@ -89,7 +90,7 @@ PRODUCTS: dict[str, ProductConfig] = {
         plot_type="Experimental Hourly Fire Danger",
         area="BC",
         model="HRDPS 2.5 km",
-        description="Hourly FWI2025 evolution anchored to CWFIS FFMC/DMC/DC, classified with the BC Schedule 2 FWI+BUI danger-region matrices and lightly smoothed over 2 km for display.",
+        description="Hourly FWI2025 evolution anchored to CWFIS FFMC/DMC/DC, with continuous FWI and BUI smoothed over 2 km before classification by the BC Schedule 2 danger-region matrices.",
         hours=FWI2025_DANGER_FORECAST_HOURS,
         archive_subdir="continental/fwi2025_danger",
         model_key="continental",
@@ -105,6 +106,19 @@ PRODUCTS: dict[str, ProductConfig] = {
         description=FIRE_WEATHER_TWO_PANEL_DESCRIPTION,
         hours=LIGHTNING_FORECAST_HOURS,
         archive_subdir="lightning/sw",
+        model_key="west",
+    ),
+    "wind_sw": ProductConfig(
+        key="wind_sw",
+        prefix="hrdps_west_wind_sw",
+        label="10 m Wind",
+        category="Surface",
+        plot_type="10 m Wind",
+        area="SW BC",
+        model="HRDPS-West 1 km",
+        description="Valid-time sustained 10 m wind shown by arrow fill, with the native HRDPS maximum gust over the preceding three-hour block shown by the arrow border.",
+        hours=WIND_FORECAST_HOURS,
+        archive_subdir="wind/sw",
         model_key="west",
     ),
     "lightning_se": ProductConfig(
@@ -245,7 +259,7 @@ PRODUCTS: dict[str, ProductConfig] = {
         plot_type="Synoptic 4-Panel",
         area="BC",
         model="ECMWF IFS Control",
-        description="500 hPa vorticity/height/wind, IPW/vapor transport/low-level vertical velocity where available, 850-700 hPa RH/850 hPa temperature/850-or-700 hPa wind, and 3-hour precipitation/MSLP/10 m wind.",
+        description="500 hPa vorticity/height/wind, IPW/vapor transport/low-level vertical velocity where available, 850-700 hPa RH/850 hPa temperature/850-or-700 hPa wind, and period precipitation/MSLP/10 m wind. Forecasts are 3-hourly through F144 and 6-hourly through F252.",
         hours=ENSEMBLE_CONTROL_FORECAST_HOURS,
         archive_subdir="ecmwf/control/fourpanel",
         model_key="ecmwf_control",
@@ -270,6 +284,7 @@ PRODUCTS_BY_MODEL = {
         "lightning_sw",
         "lightning_se",
         "lightning_ne",
+        "wind_sw",
         "temperature_south",
         "temperature_north",
         "fwi2025_danger",
@@ -374,6 +389,8 @@ def default_plot_dir_for_product(product_key: str, model: str) -> Path:
         return Path("plots/hrdps_continental_lightning")
     if product_key.startswith("lightning"):
         return Path("plots/hrdps_west_lightning")
+    if product_key == "wind_sw":
+        return Path("plots/hrdps_west_lightning")
     if product_key == "continental_temperature":
         return Path("plots/hrdps_continental_temperature")
     if product_key.startswith("temperature"):
@@ -405,7 +422,7 @@ def plot_dir_for_product(
         return lightning_verif_plots_dir or default_plot_dir_for_product(product_key, model)
     if product_key.endswith("fourpanel") or product_key.endswith("_fourpanel"):
         return fourpanel_plots_dir or default_plot_dir_for_product(product_key, model)
-    if "lightning" in product_key:
+    if "lightning" in product_key or product_key == "wind_sw":
         return lightning_plots_dir or default_plot_dir_for_product(product_key, model)
     if "temperature" in product_key:
         return temperature_plots_dir or default_plot_dir_for_product(product_key, model)
@@ -513,6 +530,9 @@ def prune_contact_sheets(images_root: Path) -> None:
 def minimum_manifest_hours(product_key: str) -> int:
     if product_key in VERIFICATION_PRODUCT_KEYS:
         return 1
+    if product_key == "ecmwf_control_fourpanel":
+        # Retain complete legacy runs produced before the forecast was extended past F048.
+        return 17
     return max(1, math.ceil(len(PRODUCTS[product_key].hours) * MIN_MANIFEST_FRAME_FRACTION))
 
 

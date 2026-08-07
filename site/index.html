@@ -534,6 +534,19 @@
           </li>
           <li class="category">
             <div class="category-title">Surface</div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="wind">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">10 m Wind</span>
+            </button>
+            <div class="submenu" data-plot-panel="wind">
+              <button class="menu-button area" type="button" data-area-toggle="wind_sw">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">Southwest BC</span>
+              </button>
+              <div class="submenu" data-model-panel="wind_sw">
+                <button class="menu-button model" type="button" data-product-select="wind_sw">HRDPS-West 1 km</button>
+              </div>
+            </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="temperature">
               <span class="chevron" aria-hidden="true"></span>
               <span class="label">2 m Temperature</span>
@@ -744,6 +757,7 @@
       const plotGroups = {
         fourpanel: ["continental_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
+        wind: ["wind_sw"],
         lightning: [
           "continental_lightning_twopanel",
           "lightning_sw",
@@ -762,6 +776,7 @@
       const areaGroups = {
         fourpanel: ["continental_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
+        wind_sw: ["wind_sw"],
         lightning_bc: ["continental_lightning_twopanel"],
         lightning_sw: ["lightning_sw"],
         lightning_se: ["lightning_se"],
@@ -776,6 +791,7 @@
       const areaPlotGroups = {
         fourpanel: "fourpanel",
         synoptic_fourpanel: "synoptic_fourpanel",
+        wind_sw: "wind",
         lightning_bc: "lightning",
         lightning_sw: "lightning",
         lightning_se: "lightning",
@@ -857,6 +873,7 @@
         return (
           productFor(activeRun, activeProductKey) ||
           productFor(activeRun, "continental_lightning_twopanel") ||
+          productFor(activeRun, "wind_sw") ||
           productFor(activeRun, "lightning_sw") ||
           productFor(activeRun, "lightning_se") ||
           productFor(activeRun, "lightning_ne") ||
@@ -1002,7 +1019,11 @@
           return;
         }
         const denominator = Math.max(frames.length - 1, 1);
+        const labelStride = Math.max(1, Math.ceil(denominator / 16));
         frames.forEach((frame, index) => {
+          if (index !== 0 && index !== frames.length - 1 && index % labelStride !== 0) {
+            return;
+          }
           const tick = document.createElement("span");
           tick.textContent = String(frame.hour);
           tick.style.left = `${(index / denominator) * 100}%`;
@@ -1063,6 +1084,7 @@
         if (!productFor(activeRun, activeProductKey)) {
           const fallbackProduct = [
             "continental_lightning_twopanel",
+            "wind_sw",
             "lightning_sw",
             "lightning_se",
             "lightning_ne",
