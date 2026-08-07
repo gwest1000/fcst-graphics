@@ -539,12 +539,12 @@
               <span class="label">10 m Wind</span>
             </button>
             <div class="submenu" data-plot-panel="wind">
-              <button class="menu-button area" type="button" data-area-toggle="wind_sw">
+              <button class="menu-button area" type="button" data-area-toggle="wind_south_coast">
                 <span class="chevron" aria-hidden="true"></span>
-                <span class="label">Southwest BC</span>
+                <span class="label">South Coast</span>
               </button>
-              <div class="submenu" data-model-panel="wind_sw">
-                <button class="menu-button model" type="button" data-product-select="wind_sw">HRDPS-West 1 km</button>
+              <div class="submenu" data-model-panel="wind_south_coast">
+                <button class="menu-button model" type="button" data-product-select="wind_south_coast">HRDPS-West 1 km</button>
               </div>
             </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="temperature">
@@ -757,7 +757,7 @@
       const plotGroups = {
         fourpanel: ["continental_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
-        wind: ["wind_sw"],
+        wind: ["wind_south_coast"],
         lightning: [
           "continental_lightning_twopanel",
           "lightning_sw",
@@ -776,7 +776,7 @@
       const areaGroups = {
         fourpanel: ["continental_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
-        wind_sw: ["wind_sw"],
+        wind_south_coast: ["wind_south_coast"],
         lightning_bc: ["continental_lightning_twopanel"],
         lightning_sw: ["lightning_sw"],
         lightning_se: ["lightning_se"],
@@ -791,7 +791,7 @@
       const areaPlotGroups = {
         fourpanel: "fourpanel",
         synoptic_fourpanel: "synoptic_fourpanel",
-        wind_sw: "wind",
+        wind_south_coast: "wind",
         lightning_bc: "lightning",
         lightning_sw: "lightning",
         lightning_se: "lightning",
@@ -873,7 +873,7 @@
         return (
           productFor(activeRun, activeProductKey) ||
           productFor(activeRun, "continental_lightning_twopanel") ||
-          productFor(activeRun, "wind_sw") ||
+          productFor(activeRun, "wind_south_coast") ||
           productFor(activeRun, "lightning_sw") ||
           productFor(activeRun, "lightning_se") ||
           productFor(activeRun, "lightning_ne") ||
@@ -1089,7 +1089,7 @@
         if (!productFor(activeRun, activeProductKey)) {
           const fallbackProduct = [
             "continental_lightning_twopanel",
-            "wind_sw",
+            "wind_south_coast",
             "lightning_sw",
             "lightning_se",
             "lightning_ne",

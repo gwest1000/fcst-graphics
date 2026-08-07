@@ -1479,6 +1479,7 @@ def make_region_plots(
     no_fwi: bool = False,
     region_keys: Iterable[str] = ("bc",),
     hourly_archive_root: Path | None = None,
+    render_wind: bool = True,
 ) -> list[Path]:
     """Compute each forecast hour once, then render all requested regional crops."""
 
@@ -1661,6 +1662,24 @@ def make_region_plots(
                 watersheds,
             )
             out_paths.append(out_path)
+        if model_config().key == "west" and render_wind:
+            from make_hrdps_wind import render_from_all_cause
+
+            out_paths.append(
+                render_from_all_cause(
+                    run,
+                    fhour,
+                    run_dir,
+                    output_dir,
+                    base_lat,
+                    base_lon,
+                    base_yslice,
+                    base_xslice,
+                    terrain_m,
+                    fields.gust_kmh,
+                    transmission_lines,
+                )
+            )
     if archived_hourly_paths:
         log(f"Archived {len(archived_hourly_paths)} hourly LPI ingredient field(s) for {run.stamp}.")
     return out_paths

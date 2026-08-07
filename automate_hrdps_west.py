@@ -23,7 +23,6 @@ import fire_danger_peak
 import make_hrdps_west_fourpanel as fourpanel
 import make_hrdps_west_lightning as lightning
 import make_hrdps_temperature as temperature
-import make_hrdps_wind as wind
 import lightning_ml_archive as ml_archive
 from publish_hrdps_west import (
     DEFAULT_PAGES_REPO,
@@ -319,7 +318,7 @@ def lightning_product_keys(model: str) -> tuple[str, ...]:
     return tuple(
         key
         for key in PRODUCTS_BY_MODEL[model]
-        if ("lightning" in key and "verif" not in key) or key == "wind_sw"
+        if ("lightning" in key and "verif" not in key) or key == "wind_south_coast"
     )
 
 
@@ -645,11 +644,9 @@ def render_lightning_worker(
             hours,
             region_keys=fire_weather_region_keys(model),
             hourly_archive_root=hourly_archive_root,
+            render_wind=render_wind,
         )
     )
-    if model == "west" and render_wind:
-        wind.set_model(model)
-        count += len(wind.make_plots(run, data_dir, output_dir, hours))
     return count
 
 

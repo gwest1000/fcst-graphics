@@ -108,17 +108,17 @@ PRODUCTS: dict[str, ProductConfig] = {
         archive_subdir="lightning/sw",
         model_key="west",
     ),
-    "wind_sw": ProductConfig(
-        key="wind_sw",
-        prefix="hrdps_west_wind_sw",
+    "wind_south_coast": ProductConfig(
+        key="wind_south_coast",
+        prefix="hrdps_west_wind_south_coast",
         label="10 m Wind",
         category="Surface",
         plot_type="10 m Wind",
-        area="SW BC",
+        area="South Coast",
         model="HRDPS-West 1 km",
-        description="Valid-time sustained 10 m wind shown by arrow fill, with the native HRDPS maximum gust over the preceding three-hour block shown by the arrow border.",
+        description="Valid-time sustained 10 m wind shown by arrow fill, with the maximum all-cause gust over the preceding three-hour block shown by the arrow outline.",
         hours=WIND_FORECAST_HOURS,
-        archive_subdir="wind/sw",
+        archive_subdir="wind/south_coast",
         model_key="west",
     ),
     "lightning_se": ProductConfig(
@@ -284,7 +284,7 @@ PRODUCTS_BY_MODEL = {
         "lightning_sw",
         "lightning_se",
         "lightning_ne",
-        "wind_sw",
+        "wind_south_coast",
         "temperature_south",
         "temperature_north",
         "fwi2025_danger",
@@ -389,7 +389,7 @@ def default_plot_dir_for_product(product_key: str, model: str) -> Path:
         return Path("plots/hrdps_continental_lightning")
     if product_key.startswith("lightning"):
         return Path("plots/hrdps_west_lightning")
-    if product_key == "wind_sw":
+    if product_key == "wind_south_coast":
         return Path("plots/hrdps_west_lightning")
     if product_key == "continental_temperature":
         return Path("plots/hrdps_continental_temperature")
@@ -422,7 +422,7 @@ def plot_dir_for_product(
         return lightning_verif_plots_dir or default_plot_dir_for_product(product_key, model)
     if product_key.endswith("fourpanel") or product_key.endswith("_fourpanel"):
         return fourpanel_plots_dir or default_plot_dir_for_product(product_key, model)
-    if "lightning" in product_key or product_key == "wind_sw":
+    if "lightning" in product_key or product_key == "wind_south_coast":
         return lightning_plots_dir or default_plot_dir_for_product(product_key, model)
     if "temperature" in product_key:
         return temperature_plots_dir or default_plot_dir_for_product(product_key, model)

@@ -39,30 +39,38 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         self.assertNotIn("lightning", publisher.PRODUCTS)
         self.assertEqual(
             set(automation.lightning_product_keys("west")),
-            {"lightning_sw", "lightning_se", "lightning_ne", "wind_sw"},
+            {"lightning_sw", "lightning_se", "lightning_ne", "wind_south_coast"},
         )
         for key in automation.lightning_product_keys("west"):
             self.assertIn(publisher.PRODUCTS[key].plot_type, {"Fire Weather", "10 m Wind"})
 
     def test_wind_product_uses_fire_weather_density_and_shared_palette(self):
-        product = publisher.PRODUCTS["wind_sw"]
+        product = publisher.PRODUCTS["wind_south_coast"]
 
         self.assertEqual(product.prefix, wind.OUTPUT_PREFIX)
-        self.assertEqual(product.area, "SW BC")
+        self.assertEqual(product.area, "South Coast")
         self.assertEqual(product.model, "HRDPS-West 1 km")
-        self.assertEqual(wind.ROW_DENSITY_MULTIPLIER, twopanel.REGIONAL_VECTOR_ROW_DENSITY_MULTIPLIER)
+        self.assertEqual(
+            wind.ROW_DENSITY_MULTIPLIER,
+            twopanel.REGIONAL_VECTOR_ROW_DENSITY_MULTIPLIER * 1.50,
+        )
         self.assertEqual(
             wind.COLUMN_DENSITY_MULTIPLIER,
             twopanel.REGIONAL_VECTOR_COLUMN_DENSITY_MULTIPLIER,
         )
-        self.assertGreater(wind.GUST_VECTOR_WIDTH, wind.SUSTAINED_VECTOR_WIDTH)
-        self.assertIn("wind_sw", publisher.PRODUCTS_BY_MODEL["west"])
-        self.assertIn("wind_sw", r2_publish.MODEL_PRODUCTS["west"])
+        self.assertGreater(np.ptp(wind.OUTER_ARROW_SHAPE[:, 1]), np.ptp(wind.INNER_ARROW_SHAPE[:, 1]))
+        self.assertIn("wind_south_coast", publisher.PRODUCTS_BY_MODEL["west"])
+        self.assertIn("wind_south_coast", r2_publish.MODEL_PRODUCTS["west"])
+        self.assertIn("wind_sw", r2_publish.RETIRED_PRODUCTS["west"])
 
         site_html = (Path(__file__).parents[1] / "site" / "index.html").read_text()
         self.assertIn('data-plot-toggle="wind"', site_html)
-        self.assertIn('data-area-toggle="wind_sw"', site_html)
-        self.assertIn('data-product-select="wind_sw"', site_html)
+        self.assertIn('data-area-toggle="wind_south_coast"', site_html)
+        self.assertIn('data-product-select="wind_south_coast"', site_html)
+
+    def test_wind_colorbar_is_narrower_and_fifty_percent_taller(self):
+        self.assertEqual(wind.COLORBAR_LAYOUT["backdrop"], (0.001, 0.028, 0.070, 0.632))
+        self.assertEqual(wind.COLORBAR_LAYOUT["cax_bounds"], (0.018, 0.073, 0.017, 0.503))
 
     def test_product_metadata_and_automation_family(self):
         product = publisher.PRODUCTS["continental_lightning_twopanel"]
