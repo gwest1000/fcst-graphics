@@ -108,6 +108,32 @@ def model_hours(model: str) -> tuple[int, ...]:
     return GEFS_FORECAST_HOURS if model == "gefs_control" else FORECAST_HOURS
 
 
+def panel_source_text(run: RunInfo, config: ModelConfig) -> str:
+    if config.key == "ecmwf_control":
+        return "Data: ECMWF"
+    return f"Data:{config.source_label} | Init:{run.init_time:%Y%m%d%H}"
+
+
+def add_panel_text(
+    ax: plt.Axes,
+    header: str,
+    footer: str,
+    run: RunInfo,
+    config: ModelConfig,
+) -> None:
+    plot_style.add_text_bands(
+        ax,
+        header,
+        footer,
+        panel_source_text(run, config),
+        header_fontsize=plot_style.FOURPANEL_HEADER_FONTSIZE,
+        footer_fontsize=plot_style.FOURPANEL_FOOTER_FONTSIZE,
+        source_fontsize=plot_style.FOURPANEL_SOURCE_FONTSIZE,
+        header_height=plot_style.FOURPANEL_HEADER_BAND_HEIGHT,
+        footer_height=plot_style.FOURPANEL_FOOTER_BAND_HEIGHT,
+    )
+
+
 @dataclass
 class Field:
     data: np.ndarray
@@ -841,7 +867,7 @@ def plot_fourpanel(
     )
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[-4, 0, 4, 8, 12, 16, 20, 24], label="$10^{-5}$ s$^{-1}$", fmt="%g")
-    plot_style.add_fourpanel_text(ax, header, "50.0kPa AbsVort(shaded), Hgt(cntrd,km), 50.0kPa Wind(hlf brb=10km/h)", run, config.source_label)
+    add_panel_text(ax, header, "50.0kPa AbsVort(shaded), Hgt(cntrd,km), 50.0kPa Wind(hlf brb=10km/h)", run, config)
 
     # 2) Total column water, low-level vertical velocity, and integrated vapor transport.
     ax = axes[1]
@@ -903,7 +929,7 @@ def plot_fourpanel(
     )
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=np.arange(10, 52, 2), label="mm", fmt="%g")
-    plot_style.add_fourpanel_text(ax, header, footer, run, config.source_label)
+    add_panel_text(ax, header, footer, run, config)
 
     # 3) 850-700 hPa RH, 850 hPa temperature, 850 hPa wind.
     ax = axes[2]
@@ -955,7 +981,7 @@ def plot_fourpanel(
     )
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[10, 15, 20, 25, 30, 70, 75, 80, 85, 90], label="%", fmt="%g")
-    plot_style.add_fourpanel_text(ax, header, "85.0-70.0kPa RH(%,shaded), 85.0kPa Temp(C,cntrd), 85/70kPa Wind(hlf brb=10km/h)", run, config.source_label)
+    add_panel_text(ax, header, "85.0-70.0kPa RH(%,shaded), 85.0kPa Temp(C,cntrd), 85/70kPa Wind(hlf brb=10km/h)", run, config)
 
     # 4) Period precipitation, MSLP, 10 m wind.
     ax = axes[3]
@@ -1018,12 +1044,12 @@ def plot_fourpanel(
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[0.25, 2, 4, 6, 8, 10, 15, 20, 25, 35, 45, 60, 80, 100], label="mm", fmt="%g")
     precip_hours = provider.precip_interval_hours(fhour)
-    plot_style.add_fourpanel_text(
+    add_panel_text(
         ax,
         header,
         f"{terrain_footer}{precip_hours}h Precip(shaded,mm), MSLP(cntrd,kPa), and 10m Wind(hlf brb=10km/h)",
         run,
-        config.source_label,
+        config,
     )
 
     out_path.parent.mkdir(parents=True, exist_ok=True)

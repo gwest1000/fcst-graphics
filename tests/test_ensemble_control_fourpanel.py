@@ -70,8 +70,17 @@ class EnsembleControlFourPanelTest(unittest.TestCase):
 
         np.testing.assert_allclose(terrain.data, 2.0)
 
-    def test_ecmwf_source_label_is_concise(self) -> None:
+    def test_ecmwf_source_stamp_is_concise_and_omits_init(self) -> None:
         self.assertEqual(ensemble.MODEL_CONFIGS["ecmwf_control"].source_label, "ECMWF")
+        run = ensemble.RunInfo(
+            cycle="00",
+            stamp="20260807T00Z",
+            init_time=ensemble.parse_stamp("20260807T00Z"),
+        )
+
+        source = ensemble.panel_source_text(run, ensemble.MODEL_CONFIGS["ecmwf_control"])
+
+        self.assertEqual(source, "Data: ECMWF")
 
     def test_ecmwf_vector_density_is_25_percent_above_gefs(self) -> None:
         gefs = ensemble.MODEL_CONFIGS["gefs_control"]
