@@ -1020,8 +1020,15 @@
         }
         const denominator = Math.max(frames.length - 1, 1);
         const labelStride = Math.max(1, Math.ceil(denominator / 16));
+        const isEcmwfControl = activeProductKey === "ecmwf_control_fourpanel";
+        const ecmwfLabelIntervalHours = frames[frames.length - 1].hour > 72 ? 24 : 6;
+        const labelIntervalHours = isEcmwfControl ? ecmwfLabelIntervalHours : null;
         frames.forEach((frame, index) => {
-          if (index !== 0 && index !== frames.length - 1 && index % labelStride !== 0) {
+          const isEndpoint = index === 0 || index === frames.length - 1;
+          const isLabelledHour = labelIntervalHours === null
+            ? index % labelStride === 0
+            : frame.hour % labelIntervalHours === 0;
+          if (!isEndpoint && !isLabelledHour) {
             return;
           }
           const tick = document.createElement("span");
