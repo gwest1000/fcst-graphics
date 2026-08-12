@@ -98,6 +98,90 @@ TEMP850_ZERO_COLOR = "#0057ff"
 TEMP850_WARM_COLOR = "#ff8c00"
 TEMP850_HOT_COLOR = "#d7191c"
 IPW_SMOOTHING_KM = 7.5
+IPW_LEVELS_MM = np.arange(10, 52, 2)
+IPW_COLORS = [
+    "#ccccff",  # 10-12
+    "#9999ff",  # 12-14
+    "#6666ff",  # 14-16
+    "#3333ff",  # 16-18
+    "#0000ff",  # 18-20
+    "#00cc00",  # 20-22
+    "#00ff00",  # 22-24
+    "#33ff33",  # 24-26
+    "#99ff99",  # 26-28
+    "#ccffcc",  # 28-30
+    "#ffffcc",  # 30-32
+    "#ffff66",  # 32-34
+    "#ffff33",  # 34-36
+    "#ffff00",  # 36-38
+    "#cccc00",  # 38-40
+    "#666600",  # 40-42
+    "#990000",  # 42-44
+    "#cc0000",  # 44-46
+    "#ff0000",  # 46-48
+    "#ff6666",  # 48-50
+]
+IPW_UNDER_COLOR = "#eeeeff"
+IPW_OVER_COLOR = "#ff66ff"
+PRECIP_LEVELS_MM = [
+    0.25,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    12.5,
+    15,
+    17.5,
+    20,
+    22.5,
+    25,
+    30,
+    35,
+    40,
+    45,
+    52.5,
+    60,
+    70,
+    80,
+    90,
+    100,
+]
+PRECIP_TICKS_MM = [0.25, 2, 4, 6, 8, 10, 15, 20, 25, 35, 45, 60, 80, 100]
+PRECIP_COLORS = [
+    "#ccccff",  # 0.25-1
+    "#9999ff",  # 1-2
+    "#6666ff",  # 2-3
+    "#3333ff",  # 3-4
+    "#0000ff",  # 4-5
+    "#00cc00",  # 5-6
+    "#00ff00",  # 6-7
+    "#33ff33",  # 7-8
+    "#66ff66",  # 8-9
+    "#99ff99",  # 9-10
+    "#ccffcc",  # 10-12.5
+    "#ffffcc",  # 12.5-15
+    "#ffff99",  # 15-17.5
+    "#ffff66",  # 17.5-20
+    "#ffff33",  # 20-22.5
+    "#ffff00",  # 22.5-25
+    "#cccc00",  # 25-30
+    "#999900",  # 30-35
+    "#666600",  # 35-40
+    "#ff9900",  # 40-45
+    "#ff6600",  # 45-52.5
+    "#ff3300",  # 52.5-60
+    "#ff9999",  # 60-70
+    "#ff6666",  # 70-80
+    "#ff3333",  # 80-90
+    "#ff0000",  # 90-100
+]
+PRECIP_OVER_COLOR = "#333333"
 LI_SMOOTHING_KM = 8.0
 CAPE_SMOOTHING_KM = 10.0
 LI_LINEWIDTHS = (2.15, 2.00, 1.85, 1.75)
@@ -357,33 +441,10 @@ def absv_shade_sigma() -> float:
 
 
 def make_ipw_cmap() -> tuple[mcolors.Colormap, mcolors.BoundaryNorm, np.ndarray]:
-    levels = np.arange(10, 52, 2)
-    colors = [
-        "#f2f2f2",
-        "#c9cbff",
-        "#8f95ff",
-        "#4f59ff",
-        "#152bd9",
-        "#0052ff",
-        "#008dff",
-        "#00c0ff",
-        "#00e260",
-        "#4cf24d",
-        "#a5f64b",
-        "#ffff35",
-        "#c9c62a",
-        "#9a811c",
-        "#d8650c",
-        "#ff2f00",
-        "#ff5757",
-        "#ff9c9c",
-        "#d474ff",
-        "#ff7dff",
-    ]
-    cmap = mcolors.ListedColormap(colors, name="ipw_rdps")
-    cmap.set_under("#ffffff")
-    cmap.set_over("#ffb2ff")
-    return cmap, mcolors.BoundaryNorm(levels, cmap.N), levels
+    cmap = mcolors.ListedColormap(IPW_COLORS, name="ipw_rdps")
+    cmap.set_under(IPW_UNDER_COLOR)
+    cmap.set_over(IPW_OVER_COLOR)
+    return cmap, mcolors.BoundaryNorm(IPW_LEVELS_MM, cmap.N), IPW_LEVELS_MM
 
 
 def make_rh_cmap() -> tuple[mcolors.Colormap, mcolors.BoundaryNorm, list[int]]:
@@ -407,27 +468,10 @@ def make_rh_cmap() -> tuple[mcolors.Colormap, mcolors.BoundaryNorm, list[int]]:
 
 
 def make_precip_cmap() -> tuple[mcolors.Colormap, mcolors.BoundaryNorm, list[float]]:
-    levels = [0.25, 1, 2, 4, 6, 8, 10, 15, 20, 25, 35, 45, 60, 80, 100]
-    colors = [
-        "#f0f0ff",
-        "#c9c7ff",
-        "#7e73ff",
-        "#263cff",
-        "#00d24a",
-        "#42ee45",
-        "#c7ff8a",
-        "#ffff2f",
-        "#c4b51e",
-        "#7f6a19",
-        "#bd6b00",
-        "#f28a00",
-        "#ff5a5a",
-        "#ff0000",
-    ]
-    cmap = mcolors.ListedColormap(colors, name="precip_rdps")
+    cmap = mcolors.ListedColormap(PRECIP_COLORS, name="precip_rdps")
     cmap.set_under((1.0, 1.0, 1.0, 0.0))
-    cmap.set_over("#5a0000")
-    return cmap, mcolors.BoundaryNorm(levels, cmap.N), levels
+    cmap.set_over(PRECIP_OVER_COLOR)
+    return cmap, mcolors.BoundaryNorm(PRECIP_LEVELS_MM, cmap.N), PRECIP_LEVELS_MM
 
 
 def make_terrain_cmap() -> tuple[mcolors.Colormap, mcolors.BoundaryNorm, list[int]]:
@@ -839,7 +883,7 @@ def plot_fourpanel(
     label_contours(high_mslp, fontsize=5.8, fmt="%.1f", colors=MSLP_BLUE)
     plot_barbs(ax, plot_lon, plot_lat, u10, v10, barb_stride, color="black", row_density=2.0, column_density=2.0)
     add_watersheds(ax, watersheds)
-    plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[0.25, 2, 4, 6, 8, 10, 15, 20, 25, 35, 45, 60, 80, 100], label="mm", fmt="%g")
+    plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=PRECIP_TICKS_MM, label="mm", fmt="%g")
     plot_style.add_fourpanel_text(
         ax,
         header,

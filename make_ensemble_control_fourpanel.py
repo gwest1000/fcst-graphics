@@ -39,6 +39,7 @@ from make_hrdps_west_fourpanel import (
     make_precip_cmap,
     make_rh_cmap,
     make_terrain_cmap,
+    PRECIP_TICKS_MM,
     plot_barbs,
 )
 
@@ -1305,7 +1306,7 @@ def plot_fourpanel(
         column_density=wind_column_density,
     )
     add_watersheds(ax, watersheds)
-    plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[0.25, 2, 4, 6, 8, 10, 15, 20, 25, 35, 45, 60, 80, 100], label="mm", fmt="%g")
+    plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=PRECIP_TICKS_MM, label="mm", fmt="%g")
     precip_hours = provider.precip_interval_hours(fhour)
     add_panel_text(
         ax,

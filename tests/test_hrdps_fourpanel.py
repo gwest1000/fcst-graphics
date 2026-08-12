@@ -117,6 +117,27 @@ class HrdpsFourPanelTest(unittest.TestCase):
 
         self.assertTrue(np.all(np.diff(luminance) < 0.0))
 
+    def test_ipw_palette_matches_operational_scale_interval_by_interval(self) -> None:
+        cmap, norm, levels = fourpanel.make_ipw_cmap()
+
+        np.testing.assert_array_equal(levels, np.arange(10, 52, 2))
+        self.assertEqual([mcolors.to_hex(color) for color in cmap.colors], fourpanel.IPW_COLORS)
+        self.assertEqual(mcolors.to_hex(cmap.get_under()), fourpanel.IPW_UNDER_COLOR)
+        self.assertEqual(mcolors.to_hex(cmap.get_over()), fourpanel.IPW_OVER_COLOR)
+        self.assertEqual(norm.N, len(levels))
+
+    def test_short_period_precip_palette_matches_operational_scale_interval_by_interval(self) -> None:
+        cmap, norm, levels = fourpanel.make_precip_cmap()
+
+        self.assertEqual(levels, fourpanel.PRECIP_LEVELS_MM)
+        self.assertEqual([mcolors.to_hex(color) for color in cmap.colors], fourpanel.PRECIP_COLORS)
+        self.assertEqual(mcolors.to_hex(cmap.get_over()), fourpanel.PRECIP_OVER_COLOR)
+        self.assertEqual(norm.N, len(levels))
+        self.assertEqual(
+            fourpanel.PRECIP_TICKS_MM,
+            [0.25, 2, 4, 6, 8, 10, 15, 20, 25, 35, 45, 60, 80, 100],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
