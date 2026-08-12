@@ -126,9 +126,16 @@ def image_name(config: fourpanel.ModelConfig, stamp: str, fhour: int) -> str:
     return f"{config.output_prefix}_fourpanel_{stamp}_f{fhour:03d}.png"
 
 
+def convective_image_name(config: fourpanel.ModelConfig, stamp: str, fhour: int) -> str:
+    return f"{config.output_prefix}_convective_fourpanel_{stamp}_f{fhour:03d}.png"
+
+
 def plot_set_complete(output_dir: Path, config: fourpanel.ModelConfig, stamp: str, hours: Iterable[int]) -> bool:
     plot_dir = output_dir / stamp
-    return all((plot_dir / image_name(config, stamp, int(hour))).exists() for hour in hours)
+    expected = [image_name(config, stamp, int(hour)) for hour in hours]
+    if config.key == "ecmwf_control":
+        expected.extend(convective_image_name(config, stamp, int(hour)) for hour in hours)
+    return all((plot_dir / name).exists() for name in expected)
 
 
 def commit_and_push_pages(pages_repo: Path, stamp: str, model_label: str) -> None:

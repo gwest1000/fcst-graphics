@@ -264,6 +264,19 @@ PRODUCTS: dict[str, ProductConfig] = {
         archive_subdir="ecmwf/control/fourpanel",
         model_key="ecmwf_control",
     ),
+    "ecmwf_control_convective_fourpanel": ProductConfig(
+        key="ecmwf_control_convective_fourpanel",
+        prefix="ecmwf_control_convective_fourpanel",
+        label="Convective 4-Panel",
+        category="4-Panel",
+        plot_type="Convective 4-Panel",
+        area="BC",
+        model="ECMWF IFS Control",
+        description="ECMWF control 500 hPa vorticity/height/wind, IPW with computed surface-based LI and MUCAPE, 850-700 hPa RH/850 hPa temperature/850-or-700 hPa wind, and period precipitation/MSLP/10 m wind. Forecasts are 3-hourly through F144 and 6-hourly through F252.",
+        hours=ENSEMBLE_CONTROL_FORECAST_HOURS,
+        archive_subdir="ecmwf/control/convective_fourpanel",
+        model_key="ecmwf_control",
+    ),
     "gefs_control_fourpanel": ProductConfig(
         key="gefs_control_fourpanel",
         prefix="gefs_control_fourpanel",
@@ -298,7 +311,10 @@ PRODUCTS_BY_MODEL = {
     "west_verif": ("lightning_verif",),
     "continental_verif": ("continental_lightning_verif",),
     "danger_verif": ("fire_danger_verif",),
-    "ecmwf_control": ("ecmwf_control_fourpanel",),
+    "ecmwf_control": (
+        "ecmwf_control_fourpanel",
+        "ecmwf_control_convective_fourpanel",
+    ),
     "gefs_control": ("gefs_control_fourpanel",),
 }
 
@@ -401,7 +417,7 @@ def default_plot_dir_for_product(product_key: str, model: str) -> Path:
         return Path("plots/hrdps_continental_fourpanel")
     if product_key == "fourpanel":
         return Path("plots/hrdps_west_fourpanel")
-    if product_key == "ecmwf_control_fourpanel":
+    if product_key in {"ecmwf_control_fourpanel", "ecmwf_control_convective_fourpanel"}:
         return Path("plots/ecmwf_control_fourpanel")
     if product_key == "gefs_control_fourpanel":
         return Path("plots/gefs_control_fourpanel")
@@ -530,7 +546,7 @@ def prune_contact_sheets(images_root: Path) -> None:
 def minimum_manifest_hours(product_key: str) -> int:
     if product_key in VERIFICATION_PRODUCT_KEYS:
         return 1
-    if product_key == "ecmwf_control_fourpanel":
+    if product_key in {"ecmwf_control_fourpanel", "ecmwf_control_convective_fourpanel"}:
         # Retain complete legacy runs produced before the forecast was extended past F048.
         return 17
     return max(1, math.ceil(len(PRODUCTS[product_key].hours) * MIN_MANIFEST_FRAME_FRACTION))

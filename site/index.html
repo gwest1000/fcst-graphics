@@ -515,6 +515,7 @@
               </button>
               <div class="submenu" data-model-panel="fourpanel">
                 <button class="menu-button model" type="button" data-product-select="continental_fourpanel">HRDPS 2.5 km</button>
+                <button class="menu-button model" type="button" data-product-select="ecmwf_control_convective_fourpanel">ECMWF IFS Control</button>
               </div>
             </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="synoptic_fourpanel">
@@ -755,7 +756,7 @@
       }
 
       const plotGroups = {
-        fourpanel: ["continental_fourpanel"],
+        fourpanel: ["continental_fourpanel", "ecmwf_control_convective_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
         wind: ["wind_south_coast"],
         lightning: [
@@ -774,7 +775,7 @@
         fire_danger_verif: ["fire_danger_verif"],
       };
       const areaGroups = {
-        fourpanel: ["continental_fourpanel"],
+        fourpanel: ["continental_fourpanel", "ecmwf_control_convective_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
         wind_south_coast: ["wind_south_coast"],
         lightning_bc: ["continental_lightning_twopanel"],
@@ -886,6 +887,7 @@
           productFor(activeRun, "continental_lightning_verif") ||
           productFor(activeRun, "lightning_verif") ||
           productFor(activeRun, "continental_fourpanel") ||
+          productFor(activeRun, "ecmwf_control_convective_fourpanel") ||
           productFor(activeRun, "ecmwf_control_fourpanel") ||
           productFor(activeRun, "gefs_control_fourpanel")
         );
@@ -1020,7 +1022,10 @@
         }
         const denominator = Math.max(frames.length - 1, 1);
         const labelStride = Math.max(1, Math.ceil(denominator / 16));
-        const isEcmwfControl = activeProductKey === "ecmwf_control_fourpanel";
+        const isEcmwfControl = [
+          "ecmwf_control_fourpanel",
+          "ecmwf_control_convective_fourpanel",
+        ].includes(activeProductKey);
         frames.forEach((frame, index) => {
           const isEndpoint = !isEcmwfControl && (index === 0 || index === frames.length - 1);
           const isLabelledHour = isEcmwfControl
@@ -1102,6 +1107,7 @@
             "continental_lightning_verif",
             "lightning_verif",
             "continental_fourpanel",
+            "ecmwf_control_convective_fourpanel",
             "ecmwf_control_fourpanel",
             "gefs_control_fourpanel",
           ].find((key) => Boolean(productFor(activeRun, key)));

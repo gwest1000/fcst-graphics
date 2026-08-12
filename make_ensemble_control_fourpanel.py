@@ -25,6 +25,7 @@ from matplotlib.lines import Line2D
 from scipy.interpolate import RegularGridInterpolator
 
 import plot_style
+import ecmwf_convective_data
 from make_hrdps_west_convective import RunInfo, WATERSHED_CACHE, parse_stamp, subset_slices
 from make_hrdps_west_fourpanel import (
     DATA_CRS,
@@ -56,6 +57,9 @@ OMEGA = 7.2921159e-5
 EARTH_RADIUS_M = 6_371_000.0
 DRY_AIR_GAS_CONSTANT = 287.05
 GRAVITY = 9.80665
+DRY_AIR_CP = 1004.0
+LATENT_HEAT_VAPORIZATION = 2.5e6
+MOIST_ADIABAT_STEPS = 48
 WIND_850_TERRAIN_MARGIN_HPA = 35.0
 DEFAULT_BARB_STRIDE = {
     "ecmwf_control": 1,
@@ -327,6 +331,91 @@ def specific_humidity_from_rh(temp_k: np.ndarray, rh_percent: np.ndarray, pressu
     return mixing_ratio / (1.0 + mixing_ratio)
 
 
+def surface_based_lifted_index_values(
+    surface_temp_k: np.ndarray,
+    surface_dewpoint_k: np.ndarray,
+    surface_pressure_hpa: np.ndarray,
+    environmental_temp_500_k: np.ndarray,
+) -> np.ndarray:
+    """Compute conventional surface-based LI with a vectorized pseudo-adiabat."""
+
+    temp = np.asarray(surface_temp_k, dtype=np.float64)
+    dewpoint = np.minimum(np.asarray(surface_dewpoint_k, dtype=np.float64), temp)
+    pressure = np.asarray(surface_pressure_hpa, dtype=np.float64)
+    env500 = np.asarray(environmental_temp_500_k, dtype=np.float64)
+    valid = (
+        np.isfinite(temp)
+        & np.isfinite(dewpoint)
+        & np.isfinite(pressure)
+        & np.isfinite(env500)
+        & (pressure > 505.0)
+        & (temp > 180.0)
+        & (dewpoint > 150.0)
+    )
+
+    lcl_temp = 1.0 / (
+        1.0 / np.maximum(dewpoint - 56.0, 1.0e-6)
+        + np.log(np.maximum(temp / dewpoint, 1.0)) / 800.0
+    ) + 56.0
+    kappa = DRY_AIR_GAS_CONSTANT / DRY_AIR_CP
+    lcl_pressure = pressure * np.power(lcl_temp / temp, 1.0 / kappa)
+    parcel500 = temp * np.power(500.0 / pressure, kappa)
+
+    saturated = valid & (lcl_pressure > 500.0)
+    parcel_temp = lcl_temp.copy()
+    log_pressure = np.log(np.maximum(lcl_pressure, 500.0))
+    delta_log_pressure = (np.log(500.0) - log_pressure) / MOIST_ADIABAT_STEPS
+
+    def moist_gradient(temp_k: np.ndarray, pressure_hpa: np.ndarray) -> np.ndarray:
+        temp_c = temp_k - 273.15
+        vapor_pressure = 6.112 * np.exp((17.67 * temp_c) / (temp_c + 243.5))
+        mixing_ratio = 0.622 * vapor_pressure / np.maximum(pressure_hpa - vapor_pressure, 1.0)
+        numerator = DRY_AIR_GAS_CONSTANT * temp_k + LATENT_HEAT_VAPORIZATION * mixing_ratio
+        denominator = DRY_AIR_CP + (
+            LATENT_HEAT_VAPORIZATION**2
+            * mixing_ratio
+            * 0.622
+            / (DRY_AIR_GAS_CONSTANT * temp_k**2)
+        )
+        return numerator / denominator
+
+    for index in range(MOIST_ADIABAT_STEPS):
+        fraction = (index + 0.5) / MOIST_ADIABAT_STEPS
+        midpoint_pressure = np.exp(log_pressure + fraction * (np.log(500.0) - log_pressure))
+        first_gradient = moist_gradient(parcel_temp, midpoint_pressure)
+        midpoint_temp = parcel_temp + 0.5 * first_gradient * delta_log_pressure
+        parcel_temp += moist_gradient(midpoint_temp, midpoint_pressure) * delta_log_pressure
+    parcel500[saturated] = parcel_temp[saturated]
+
+    lifted_index = env500 - parcel500
+    return np.where(valid & (np.abs(lifted_index) < 50.0), lifted_index, np.nan).astype(np.float32)
+
+
+def surface_based_lifted_index(provider: "BaseProvider", fhour: int) -> Field:
+    env500 = provider.pressure(fhour, "t", 500)
+    surface_temp = interpolate_to_reference(
+        provider.surface(fhour, "2t", "heightAboveGround", 2),
+        env500,
+    )
+    surface_dewpoint = interpolate_to_reference(
+        provider.surface(fhour, "2d", "heightAboveGround", 2),
+        env500,
+    )
+    surface_pressure = provider.surface_pressure_hpa(fhour)
+    if surface_pressure is None:
+        raise RuntimeError("Surface pressure is required for ECMWF surface-based LI.")
+    surface_pressure = interpolate_to_reference(surface_pressure, env500)
+    return field_like(
+        env500,
+        surface_based_lifted_index_values(
+            surface_temp.data,
+            surface_dewpoint.data,
+            surface_pressure.data,
+            env500.data,
+        ),
+    )
+
+
 def pressure_level_ipw(provider: "BaseProvider", fhour: int) -> Field:
     levels = (925, 850, 700, 500)
     q_fields: list[Field] = []
@@ -491,6 +580,10 @@ class BaseProvider:
 
 
 class EcmwfProvider(BaseProvider):
+    def __init__(self, data_root: Path, run: RunInfo):
+        super().__init__(data_root, run)
+        self._convective_archive: ecmwf_convective_data.RegionalConvectiveArchive | None = None
+
     def cycle_root(self) -> Path:
         return self.data_root / "raw" / "ecmwf" / "realtime" / f"{self.run.init_time:%Y%m%d}" / self.run.cycle
 
@@ -502,10 +595,24 @@ class EcmwfProvider(BaseProvider):
 
     def surface_pressure_hpa(self, fhour: int) -> Field | None:
         try:
-            psfc = self.surface(fhour, "sp", "surface", 0)
+            psfc = self.convective_field(fhour, "sp")
         except Exception:
-            return None
+            try:
+                psfc = self.surface(fhour, "sp", "surface", 0)
+            except Exception:
+                return None
         return field_like(psfc, psfc.data / 100.0)
+
+    def convective_field(self, fhour: int, short_name: str) -> Field:
+        if self._convective_archive is None:
+            path = ecmwf_convective_data.archive_path(
+                self.data_root,
+                f"{self.run.init_time:%Y%m%d}",
+                self.run.cycle,
+            )
+            self._convective_archive = ecmwf_convective_data.load_archive(path)
+        data, lat, lon = self._convective_archive.field(short_name, fhour)
+        return crop_extent(Field(data=data, lat=lat, lon=lon))
 
     def terrain(self) -> Field:
         geopotential = crop_extent(
@@ -514,7 +621,10 @@ class EcmwfProvider(BaseProvider):
         return geopotential_height_m(geopotential)
 
     def cape(self, fhour: int, reference: Field) -> Field | None:
-        return None
+        try:
+            return interpolate_to_reference(self.convective_field(fhour, "mucape"), reference)
+        except Exception:
+            return None
 
     def precip_interval_hours(self, fhour: int) -> int:
         return 3 if fhour <= ECMWF_THREE_HOURLY_END else 6
@@ -578,6 +688,7 @@ def provider_for(model: str, data_root: Path, run: RunInfo) -> BaseProvider:
 
 
 def required_files_present(model: str, data_root: Path, run: RunInfo, hours: Iterable[int]) -> bool:
+    hours = tuple(int(hour) for hour in hours)
     provider = provider_for(model, data_root, run)
     try:
         if model == "ecmwf_control":
@@ -599,6 +710,14 @@ def required_files_present(model: str, data_root: Path, run: RunInfo, hours: Ite
             provider.surface(fhour, "10u", "heightAboveGround", 10)
             provider.surface(fhour, "10v", "heightAboveGround", 10)
             provider.precip(fhour)
+        if model == "ecmwf_control":
+            convective_path = ecmwf_convective_data.archive_path(
+                data_root,
+                f"{run.init_time:%Y%m%d}",
+                run.cycle,
+            )
+            if not ecmwf_convective_data.archive_has_hours(convective_path, hours):
+                raise FileNotFoundError(convective_path)
     except Exception as exc:
         log(f"Missing {model} input fields for {run.stamp}: {exc}")
         return False
@@ -659,6 +778,14 @@ def ensure_downloads(
             ]
             log("Running terrain download: " + " ".join(terrain_cmd))
             subprocess.run(terrain_cmd, cwd=concrete_repo, check=True)
+        log("Ensuring BC-only ECMWF control MUCAPE/surface-pressure archive.")
+        ecmwf_convective_data.ensure_archive(
+            data_root,
+            f"{run.init_time:%Y%m%d}",
+            run.cycle,
+            hours,
+            force=force,
+        )
         return
     elif model == "gefs_control":
         cmd = [
@@ -807,8 +934,189 @@ def plot_transport_vectors(
     add_ivt_vector_legend(ax)
 
 
+def plot_synoptic_core_panel(
+    fig: plt.Figure,
+    ax: plt.Axes,
+    config: ModelConfig,
+    provider: BaseProvider,
+    run: RunInfo,
+    fhour: int,
+    watersheds,
+    shade_stride: int,
+    contour_stride: int,
+    vector_stride: int,
+    wind_row_density: float,
+    wind_column_density: float,
+) -> list[plt.Axes]:
+    existing_axes = set(fig.axes)
+    ipw = provider.ipw(fhour)
+    vt_u, vt_v = full_column_vapor_transport(provider, fhour)
+    wvel = low_level_vertical_velocity_cm_s(provider, fhour)
+    cmap, norm, levels = make_ipw_cmap()
+    cf = ax.contourf(
+        decimate(ipw.lon, shade_stride),
+        decimate(ipw.lat, shade_stride),
+        decimate(ipw.data, shade_stride),
+        levels=levels,
+        cmap=cmap,
+        norm=norm,
+        extend="both",
+        transform=DATA_CRS,
+        transform_first=True,
+        zorder=3,
+    )
+    footer = "IPW(shaded,mm), IVT(unit vctrs coloured by kg m-1 s-1)"
+    if wvel is not None:
+        clat, clon, cwvel = raw_contour_grid(
+            wvel.lat,
+            wvel.lon,
+            wvel.data,
+            stride=contour_stride,
+        )
+        positive = ax.contour(
+            clon,
+            clat,
+            cwvel,
+            levels=np.arange(5, 55, 5),
+            colors="#d00000",
+            linewidths=1.1,
+            transform=DATA_CRS,
+            zorder=23,
+        )
+        negative = ax.contour(
+            clon,
+            clat,
+            cwvel,
+            levels=np.arange(-50, 0, 5),
+            colors="#1658d3",
+            linewidths=1.0,
+            linestyles="dashed",
+            transform=DATA_CRS,
+            zorder=23,
+        )
+        label_contours(positive, fontsize=5.0, fmt="%d", colors="#d00000")
+        label_contours(negative, fontsize=5.0, fmt="%d", colors="#1658d3")
+        footer = "IPW(shaded,mm), LL WVel(cntrd every 5cm/s), IVT(unit vctrs coloured by magnitude)"
+    plot_transport_vectors(
+        ax,
+        vt_u,
+        vt_v,
+        vector_stride,
+        row_density=wind_row_density,
+        column_density=wind_column_density,
+    )
+    add_watersheds(ax, watersheds)
+    plot_style.add_fourpanel_colorbar(
+        fig,
+        ax,
+        cf,
+        ticks=np.arange(10, 52, 2),
+        label="mm",
+        fmt="%g",
+    )
+    add_panel_text(ax, plot_style.valid_header(run, fhour, config.label), footer, run, config)
+    return [created for created in fig.axes if created not in existing_axes]
+
+
+def plot_convective_core_panel(
+    fig: plt.Figure,
+    ax: plt.Axes,
+    config: ModelConfig,
+    provider: BaseProvider,
+    run: RunInfo,
+    fhour: int,
+    watersheds,
+    shade_stride: int,
+    contour_stride: int,
+) -> None:
+    ipw = provider.ipw(fhour)
+    lifted_index = surface_based_lifted_index(provider, fhour)
+    cape = provider.cape(fhour, ipw)
+    if cape is None:
+        raise RuntimeError(f"MUCAPE is unavailable for {run.stamp} F{fhour:03d}.")
+
+    cmap, norm, levels = make_ipw_cmap()
+    cf = ax.contourf(
+        decimate(ipw.lon, shade_stride),
+        decimate(ipw.lat, shade_stride),
+        decimate(ipw.data, shade_stride),
+        levels=levels,
+        cmap=cmap,
+        norm=norm,
+        extend="both",
+        transform=DATA_CRS,
+        transform_first=True,
+        zorder=3,
+    )
+    clat, clon, ccape = raw_contour_grid(
+        cape.lat,
+        cape.lon,
+        np.where((cape.data >= 0.0) & (cape.data < 20000.0), cape.data, np.nan),
+        stride=contour_stride,
+    )
+    with plt.rc_context({"hatch.color": "#aaaaaa", "hatch.linewidth": 0.26}):
+        ax.contourf(
+            clon,
+            clat,
+            ccape,
+            levels=[500, 1000],
+            colors="none",
+            hatches=["/"],
+            transform=DATA_CRS,
+            zorder=20,
+        )
+    with plt.rc_context({"hatch.color": "#555555", "hatch.linewidth": 0.30}):
+        ax.contourf(
+            clon,
+            clat,
+            ccape,
+            levels=[1000, 20000],
+            colors="none",
+            hatches=["xx"],
+            transform=DATA_CRS,
+            zorder=20,
+        )
+
+    clat, clon, cli = raw_contour_grid(
+        lifted_index.lat,
+        lifted_index.lon,
+        lifted_index.data,
+        stride=contour_stride,
+    )
+    li_levels = [-6, -4, -2, 0]
+    li_colors = ["#d000b8", "#d7191c", "#f28e2b", "black"]
+    li_contours = ax.contour(
+        clon,
+        clat,
+        cli,
+        levels=li_levels,
+        colors=li_colors,
+        linewidths=(2.1, 1.9, 1.7, 1.55),
+        transform=DATA_CRS,
+        zorder=22,
+    )
+    label_contours(li_contours, fontsize=5.8, fmt="%d", colors=li_colors)
+    add_watersheds(ax, watersheds)
+    plot_style.add_fourpanel_colorbar(
+        fig,
+        ax,
+        cf,
+        ticks=np.arange(10, 52, 2),
+        label="mm",
+        fmt="%g",
+    )
+    add_panel_text(
+        ax,
+        plot_style.valid_header(run, fhour, config.label),
+        "IPW(shaded,mm), SBLI(cntrd 0/-2/-4/-6), MUCAPE(hatch 500/1000J/kg)",
+        run,
+        config,
+    )
+
+
 def plot_fourpanel(
     out_path: Path,
+    convective_out_path: Path | None,
     config: ModelConfig,
     provider: BaseProvider,
     run: RunInfo,
@@ -871,65 +1179,20 @@ def plot_fourpanel(
 
     # 2) Total column water, low-level vertical velocity, and integrated vapor transport.
     ax = axes[1]
-    ipw = provider.ipw(fhour)
-    vt_u, vt_v = full_column_vapor_transport(provider, fhour)
-    wvel = low_level_vertical_velocity_cm_s(provider, fhour)
-    cmap, norm, levels = make_ipw_cmap()
-    cf = ax.contourf(
-        decimate(ipw.lon, shade_stride),
-        decimate(ipw.lat, shade_stride),
-        decimate(ipw.data, shade_stride),
-        levels=levels,
-        cmap=cmap,
-        norm=norm,
-        extend="both",
-        transform=DATA_CRS,
-        transform_first=True,
-        zorder=3,
-    )
-    footer = "IPW(shaded,mm), IVT(unit vctrs coloured by kg m-1 s-1)"
-    if wvel is not None:
-        clat, clon, cwvel = raw_contour_grid(
-            wvel.lat,
-            wvel.lon,
-            wvel.data,
-            stride=contour_stride,
-        )
-        positive = ax.contour(
-            clon,
-            clat,
-            cwvel,
-            levels=np.arange(5, 55, 5),
-            colors="#d00000",
-            linewidths=1.1,
-            transform=DATA_CRS,
-            zorder=23,
-        )
-        negative = ax.contour(
-            clon,
-            clat,
-            cwvel,
-            levels=np.arange(-50, 0, 5),
-            colors="#1658d3",
-            linewidths=1.0,
-            linestyles="dashed",
-            transform=DATA_CRS,
-            zorder=23,
-        )
-        label_contours(positive, fontsize=5.0, fmt="%d", colors="#d00000")
-        label_contours(negative, fontsize=5.0, fmt="%d", colors="#1658d3")
-        footer = "IPW(shaded,mm), LL WVel(cntrd every 5cm/s), IVT(unit vctrs coloured by magnitude)"
-    plot_transport_vectors(
+    synoptic_aux_axes = plot_synoptic_core_panel(
+        fig,
         ax,
-        vt_u,
-        vt_v,
+        config,
+        provider,
+        run,
+        fhour,
+        watersheds,
+        shade_stride,
+        contour_stride,
         pressure_barb_stride,
-        row_density=wind_row_density,
-        column_density=wind_column_density,
+        wind_row_density,
+        wind_column_density,
     )
-    add_watersheds(ax, watersheds)
-    plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=np.arange(10, 52, 2), label="mm", fmt="%g")
-    add_panel_text(ax, header, footer, run, config)
 
     # 3) 850-700 hPa RH, 850 hPa temperature, 850 hPa wind.
     ax = axes[2]
@@ -1054,6 +1317,25 @@ def plot_fourpanel(
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, facecolor="white")
+    if convective_out_path is not None:
+        for auxiliary_axis in synoptic_aux_axes:
+            auxiliary_axis.remove()
+        axes[1].remove()
+        convective_axis = fig.add_axes(plot_style.FOURPANEL_POSITIONS[1], projection=PANEL_PROJ)
+        add_base_features(convective_axis)
+        plot_convective_core_panel(
+            fig,
+            convective_axis,
+            config,
+            provider,
+            run,
+            fhour,
+            watersheds,
+            shade_stride,
+            contour_stride,
+        )
+        convective_out_path.parent.mkdir(parents=True, exist_ok=True)
+        fig.savefig(convective_out_path, facecolor="white")
     plt.close(fig)
 
 
@@ -1084,9 +1366,28 @@ def make_plots(
     for fhour in hours:
         log(f"Plotting {config.label} F{fhour:03d}.")
         out_path = plot_dir / f"{config.output_prefix}_fourpanel_{run.stamp}_f{fhour:03d}.png"
-        plot_fourpanel(out_path, config, provider, run, fhour, watersheds, shade_stride, contour_stride, barb_stride)
+        convective_out_path = (
+            plot_dir / f"{config.output_prefix}_convective_fourpanel_{run.stamp}_f{fhour:03d}.png"
+            if model == "ecmwf_control"
+            else None
+        )
+        plot_fourpanel(
+            out_path,
+            convective_out_path,
+            config,
+            provider,
+            run,
+            fhour,
+            watersheds,
+            shade_stride,
+            contour_stride,
+            barb_stride,
+        )
         log(f"  wrote {out_path}")
         out_paths.append(out_path)
+        if convective_out_path is not None:
+            log(f"  wrote {convective_out_path}")
+            out_paths.append(convective_out_path)
     return out_paths
 
 

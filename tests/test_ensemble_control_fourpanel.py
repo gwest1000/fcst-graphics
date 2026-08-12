@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import numpy as np
 
+import automate_ensemble_control_fourpanel as automation
 import make_ensemble_control_fourpanel as ensemble
+import publish_hrdps_west as publisher
+import r2_publish
 
 
 def field(value: float, step_range: str = "") -> ensemble.Field:
@@ -95,6 +100,38 @@ class EnsembleControlFourPanelTest(unittest.TestCase):
             ensemble.barb_column_density(ecmwf),
             ensemble.barb_column_density(gefs) * 1.25,
         )
+
+    def test_surface_based_lifted_index_matches_reference_parcel_values(self) -> None:
+        actual = ensemble.surface_based_lifted_index_values(
+            np.array([303.15, 293.15, 288.15], dtype=np.float32),
+            np.array([293.15, 283.15, 268.15], dtype=np.float32),
+            np.array([1000.0, 900.0, 800.0], dtype=np.float32),
+            np.array([263.15, 258.15, 255.15], dtype=np.float32),
+        )
+
+        np.testing.assert_allclose(actual, [-6.2164, -2.6215, -0.1292], atol=0.04)
+
+    def test_ecmwf_convective_product_is_published_with_synoptic_product(self) -> None:
+        key = "ecmwf_control_convective_fourpanel"
+
+        self.assertIn(key, publisher.PRODUCTS_BY_MODEL["ecmwf_control"])
+        self.assertIn(key, r2_publish.MODEL_PRODUCTS["ecmwf_control"])
+        self.assertEqual(publisher.PRODUCTS[key].prefix, "ecmwf_control_convective_fourpanel")
+
+        site_html = (Path(__file__).parents[1] / "site" / "index.html").read_text()
+        self.assertIn(f'data-product-select="{key}"', site_html)
+
+    def test_ecmwf_plot_set_requires_both_four_panel_products(self) -> None:
+        config = ensemble.MODEL_CONFIGS["ecmwf_control"]
+        stamp = "20260807T12Z"
+        with TemporaryDirectory() as directory:
+            plot_dir = Path(directory) / stamp
+            plot_dir.mkdir()
+            (plot_dir / automation.image_name(config, stamp, 0)).touch()
+            self.assertFalse(automation.plot_set_complete(Path(directory), config, stamp, (0,)))
+
+            (plot_dir / automation.convective_image_name(config, stamp, 0)).touch()
+            self.assertTrue(automation.plot_set_complete(Path(directory), config, stamp, (0,)))
 
     def test_raw_contour_grid_does_not_modify_values(self) -> None:
         source = np.arange(16, dtype=np.float32).reshape(4, 4)

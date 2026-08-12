@@ -59,7 +59,10 @@ MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
         "lightning_verif",
     ),
     "gefs_control": ("gefs_control_fourpanel",),
-    "ecmwf_control": ("ecmwf_control_fourpanel",),
+    "ecmwf_control": (
+        "ecmwf_control_fourpanel",
+        "ecmwf_control_convective_fourpanel",
+    ),
 }
 
 DEFAULT_PRODUCTS = {
