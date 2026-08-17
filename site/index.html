@@ -693,11 +693,13 @@
           <div class="stage">
             <img
               id="animationImage"
+              crossorigin="anonymous"
               alt="Forecast frame"
             />
             <img
               id="fireActivityOverlay"
               class="fire-activity-overlay"
+              crossorigin="anonymous"
               alt=""
               aria-hidden="true"
               hidden
@@ -849,6 +851,16 @@
       let followLatestRun = requestedLatestRun;
       let fireActivityManifest = null;
       let desiredFireOverlayUrl = "";
+      let desiredFireOverlayProductKey = "";
+      let currentBaseFrameUrl = "";
+      let currentCompositeKey = "";
+      let compositeBuildKey = "";
+      let compositeCacheGeneration = 0;
+      let compositeUnavailable = false;
+      const compositeFrameUrls = new Map();
+      const compositeCanvas = document.createElement("canvas");
+      const compositeContext = compositeCanvas.getContext("2d");
+      const COMPOSITE_FRAME_CACHE_LIMIT = 24;
 
       function padHour(hour) {
         return String(hour).padStart(3, "0");
@@ -919,6 +931,136 @@
         return `${base}${filename}?v=${encodeURIComponent(`${manifestVersion}-${assetVersion}`)}`;
       }
 
+      function clearCompositeFrameCache() {
+        compositeCacheGeneration += 1;
+        compositeUnavailable = false;
+        for (const url of compositeFrameUrls.values()) {
+          URL.revokeObjectURL(url);
+        }
+        compositeFrameUrls.clear();
+        currentCompositeKey = "";
+      }
+
+      function cacheCompositeFrame(key, url) {
+        const previous = compositeFrameUrls.get(key);
+        if (previous) {
+          URL.revokeObjectURL(previous);
+          compositeFrameUrls.delete(key);
+        }
+        compositeFrameUrls.set(key, url);
+        while (compositeFrameUrls.size > COMPOSITE_FRAME_CACHE_LIMIT) {
+          const oldest = compositeFrameUrls.entries().next().value;
+          if (!oldest) {
+            break;
+          }
+          compositeFrameUrls.delete(oldest[0]);
+          URL.revokeObjectURL(oldest[1]);
+        }
+      }
+
+      function fireOverlayApplies() {
+        const product = currentProduct();
+        return Boolean(
+          desiredFireOverlayUrl &&
+          desiredFireOverlayProductKey &&
+          desiredFireOverlayProductKey === product?.key
+        );
+      }
+
+      function fireOverlayReady() {
+        return Boolean(
+          fireOverlayApplies() &&
+          fireActivityOverlay.src === desiredFireOverlayUrl &&
+          fireActivityOverlay.complete &&
+          fireActivityOverlay.naturalWidth > 0
+        );
+      }
+
+      function compositeKeyFor(url) {
+        return fireOverlayApplies() ? `${url}|${desiredFireOverlayUrl}` : "";
+      }
+
+      function showCurrentFrameImage() {
+        if (!currentBaseFrameUrl) {
+          return;
+        }
+        currentCompositeKey = compositeKeyFor(currentBaseFrameUrl);
+        const cached = currentCompositeKey
+          ? compositeFrameUrls.get(currentCompositeKey)
+          : "";
+        if (cached) {
+          fireActivityOverlay.hidden = true;
+          if (animationImage.src !== cached) {
+            animationImage.src = cached;
+          }
+          return;
+        }
+        if (animationImage.src !== currentBaseFrameUrl) {
+          animationImage.src = currentBaseFrameUrl;
+        }
+        fireActivityOverlay.hidden = !fireOverlayReady();
+        composeCurrentFrame();
+      }
+
+      function composeCurrentFrame() {
+        const key = currentCompositeKey;
+        if (
+          !key ||
+          compositeFrameUrls.has(key) ||
+          compositeBuildKey ||
+          compositeUnavailable ||
+          !compositeContext ||
+          !fireOverlayReady() ||
+          animationImage.src !== currentBaseFrameUrl ||
+          !animationImage.complete ||
+          animationImage.naturalWidth < 1
+        ) {
+          return;
+        }
+        const generation = compositeCacheGeneration;
+        compositeBuildKey = key;
+        try {
+          compositeCanvas.width = animationImage.naturalWidth;
+          compositeCanvas.height = animationImage.naturalHeight;
+          compositeContext.clearRect(0, 0, compositeCanvas.width, compositeCanvas.height);
+          compositeContext.drawImage(animationImage, 0, 0);
+          compositeContext.drawImage(
+            fireActivityOverlay,
+            0,
+            0,
+            compositeCanvas.width,
+            compositeCanvas.height,
+          );
+          compositeCanvas.toBlob((blob) => {
+            compositeBuildKey = "";
+            if (generation !== compositeCacheGeneration) {
+              composeCurrentFrame();
+              return;
+            }
+            if (blob) {
+              const compositeUrl = URL.createObjectURL(blob);
+              cacheCompositeFrame(key, compositeUrl);
+              if (key === currentCompositeKey) {
+                fireActivityOverlay.hidden = true;
+                animationImage.src = compositeUrl;
+              }
+              if (currentCompositeKey && !compositeFrameUrls.has(currentCompositeKey)) {
+                composeCurrentFrame();
+              }
+            } else {
+              compositeUnavailable = true;
+              console.warn("Could not flatten the current fire-activity image.");
+            }
+          }, "image/png");
+        } catch (error) {
+          compositeBuildKey = "";
+          if (generation === compositeCacheGeneration) {
+            compositeUnavailable = true;
+          }
+          console.warn("Could not flatten the current fire-activity image.", error);
+        }
+      }
+
       function renderFireActivityOverlay() {
         const product = currentProduct();
         const overlay = fireActivityManifest?.products?.[product?.key];
@@ -930,20 +1072,33 @@
           (!overlay.minimumRunStamp || activeRun.stamp >= overlay.minimumRunStamp)
         );
         if (!canShow) {
+          const changed = Boolean(desiredFireOverlayUrl || desiredFireOverlayProductKey);
           desiredFireOverlayUrl = "";
+          desiredFireOverlayProductKey = "";
           fireActivityOverlay.hidden = true;
           fireActivityOverlay.removeAttribute("src");
           fireActivityOverlay.removeAttribute("title");
+          if (changed) {
+            clearCompositeFrameCache();
+            showCurrentFrameImage();
+          }
           return;
         }
         const url = new URL(overlay.image, window.location.href);
         url.searchParams.set("v", overlay.assetVersion);
+        const changed = (
+          desiredFireOverlayUrl !== url.href ||
+          desiredFireOverlayProductKey !== product.key
+        );
+        if (changed) {
+          clearCompositeFrameCache();
+        }
         desiredFireOverlayUrl = url.href;
+        desiredFireOverlayProductKey = product.key;
         fireActivityOverlay.hidden = true;
         fireActivityOverlay.title = `Current fire activity, updated ${fireActivityManifest.observationTime || "recently"}`;
-        if (fireActivityOverlay.src === desiredFireOverlayUrl && fireActivityOverlay.complete) {
-          fireActivityOverlay.hidden = false;
-        } else {
+        showCurrentFrameImage();
+        if (fireActivityOverlay.src !== desiredFireOverlayUrl || !fireActivityOverlay.complete) {
           fireActivityOverlay.src = desiredFireOverlayUrl;
         }
       }
@@ -1164,7 +1319,8 @@
         currentIndex = (index + frames.length) % frames.length;
         const frame = frames[currentIndex];
         const product = currentProduct();
-        animationImage.src = frame.href;
+        currentBaseFrameUrl = frame.href;
+        showCurrentFrameImage();
         animationImage.alt = `${product.label} F${frame.fhour}`;
         frameSlider.value = String(currentIndex);
         sliderTickLabels.forEach((tick) => {
@@ -1281,11 +1437,28 @@
 
       fireActivityOverlay.addEventListener("load", () => {
         if (fireActivityOverlay.src === desiredFireOverlayUrl) {
-          fireActivityOverlay.hidden = false;
+          showCurrentFrameImage();
         }
       });
       fireActivityOverlay.addEventListener("error", () => {
         fireActivityOverlay.hidden = true;
+        if (animationImage.src !== currentBaseFrameUrl) {
+          animationImage.src = currentBaseFrameUrl;
+        }
+      });
+
+      animationImage.addEventListener("load", () => {
+        const cached = currentCompositeKey
+          ? compositeFrameUrls.get(currentCompositeKey)
+          : "";
+        if (cached && animationImage.src === cached) {
+          fireActivityOverlay.hidden = true;
+          return;
+        }
+        if (animationImage.src === currentBaseFrameUrl) {
+          fireActivityOverlay.hidden = !fireOverlayReady();
+          composeCurrentFrame();
+        }
       });
 
       runSelect.addEventListener("change", (event) => {

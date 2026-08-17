@@ -112,8 +112,13 @@ class FireActivityOverlayTests(unittest.TestCase):
         html = (Path(__file__).parents[1] / "site" / "index.html").read_text()
 
         self.assertIn('id="fireActivityOverlay"', html)
+        self.assertEqual(html.count('crossorigin="anonymous"'), 2)
         self.assertIn("followLatestRun &&", html)
         self.assertIn("fireActivityManifest?.available", html)
+        self.assertIn("function composeCurrentFrame()", html)
+        self.assertIn('compositeCanvas.toBlob((blob) => {', html)
+        self.assertIn('}, "image/png");', html)
+        self.assertIn("const compositeFrameUrls = new Map();", html)
         self.assertIn("60 * 60 * 1000", html)
 
 

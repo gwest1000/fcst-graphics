@@ -23,7 +23,11 @@ The active-fire and hotspot caches are considered fresh for 45 minutes. The
 hourly job publishes four 1440x900 transparent overlays plus
 `manifests/fire_activity.json`. PNGs are uploaded only when their pixels
 change; the manifest is updated on every successful job. The viewer polls the
-manifest every hour and applies the layer only to `latest` runs.
+manifest every hour and applies the layer only to `latest` runs. In the
+browser, the current base frame and live fire layer are flattened into a
+cached PNG. The visible `<img>` therefore retains the live icons when it is
+opened or copied on its own, without republishing every forecast hour whenever
+fire activity changes.
 
 A retrieval or cache-write failure is logged. A cached layer can be used for
 up to 12 hours; after that the manifest marks the layer unavailable and the
