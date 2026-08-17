@@ -38,6 +38,18 @@ class EcmwfEnsembleSpreadTests(unittest.TestCase):
         self.assertAlmostEqual((spread.EXTENT[3] - spread.EXTENT[2]) / old_height, 0.85)
         self.assertAlmostEqual(spread.EXTENT[1], -52.0)
 
+    def test_source_crop_covers_projected_corners_across_the_dateline(self):
+        west, east, south, north = spread.SOURCE_EXTENT
+        self.assertLess(west, -205.0)
+        self.assertGreater(east, -10.0)
+        self.assertLess(south, 0.0)
+        self.assertGreater(north, 80.0)
+        wrapped = spread.centered_longitudes(
+            np.asarray([150.0, -180.0, -10.0]),
+            (spread.EXTENT[0] + spread.EXTENT[1]) / 2.0,
+        )
+        np.testing.assert_allclose(wrapped, [-210.0, -180.0, -10.0])
+
     def test_mean_height_smoothing_reduces_grid_scale_noise(self):
         field = np.zeros((9, 9), dtype=float)
         field[4, 4] = 1.0

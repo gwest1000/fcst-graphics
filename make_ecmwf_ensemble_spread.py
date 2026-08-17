@@ -56,7 +56,8 @@ PLOT_CRS = ccrs.LambertConformal(
     central_latitude=(EXTENT[2] + EXTENT[3]) / 2.0,
     standard_parallels=(30.0, 60.0),
 )
-FIELD_BUFFER_DEGREES = 4.0
+PROJECTION_EDGE_SAMPLES = 721
+SOURCE_COVERAGE_MARGIN_DEGREES = 2.0
 MEAN_HEIGHT_SMOOTHING_SIGMA = 1.25
 GREEN_BLUE_BOUNDARY_KM = 0.05
 GREEN_BLUE_BOUNDARY_LINEWIDTH = 1.5
@@ -119,6 +120,70 @@ SPREAD_COLORS = (
     "#e9e9e9",
     "#efefef",
 )
+
+
+def centered_longitudes(longitudes: np.ndarray, center: float) -> np.ndarray:
+    return center + np.mod(longitudes - center + 180.0, 360.0) - 180.0
+
+
+def source_coverage_extent() -> tuple[float, float, float, float]:
+    """Return the geographic data bounds needed to fill the projected plot box."""
+    west, east, south, north = EXTENT
+    vertical = np.linspace(south, north, PROJECTION_EDGE_SAMPLES)
+    horizontal = np.linspace(west, east, PROJECTION_EDGE_SAMPLES)
+    boundary_lon = np.concatenate(
+        (
+            np.full_like(vertical, west),
+            np.full_like(vertical, east),
+            horizontal,
+            horizontal,
+        )
+    )
+    boundary_lat = np.concatenate(
+        (
+            vertical,
+            vertical,
+            np.full_like(horizontal, south),
+            np.full_like(horizontal, north),
+        )
+    )
+    projected = PLOT_CRS.transform_points(DATA_CRS, boundary_lon, boundary_lat)
+    projected = projected[np.isfinite(projected).all(axis=1)]
+    x0, x1 = np.min(projected[:, 0]), np.max(projected[:, 0])
+    y0, y1 = np.min(projected[:, 1]), np.max(projected[:, 1])
+
+    edge = np.linspace(0.0, 1.0, PROJECTION_EDGE_SAMPLES)
+    projected_x = np.concatenate(
+        (
+            x0 + (x1 - x0) * edge,
+            x0 + (x1 - x0) * edge,
+            np.full_like(edge, x0),
+            np.full_like(edge, x1),
+        )
+    )
+    projected_y = np.concatenate(
+        (
+            np.full_like(edge, y0),
+            np.full_like(edge, y1),
+            y0 + (y1 - y0) * edge,
+            y0 + (y1 - y0) * edge,
+        )
+    )
+    geographic = DATA_CRS.transform_points(PLOT_CRS, projected_x, projected_y)
+    geographic = geographic[np.isfinite(geographic).all(axis=1)]
+    center = (west + east) / 2.0
+    longitude = centered_longitudes(geographic[:, 0], center)
+    latitude = geographic[:, 1]
+    margin = SOURCE_COVERAGE_MARGIN_DEGREES
+    return (
+        float(np.min(longitude) - margin),
+        float(np.max(longitude) + margin),
+        float(max(-90.0, np.min(latitude) - margin)),
+        float(min(90.0, np.max(latitude) + margin)),
+    )
+
+
+SOURCE_EXTENT = source_coverage_extent()
 OUTPUT_PREFIX = "ecmwf_ensemble_spread_500"
 DEFAULT_OUTPUT_DIR = project_paths.plot_path("ecmwf_ensemble_spread")
 
@@ -135,18 +200,20 @@ def spread_cmap_norm() -> tuple[ListedColormap, BoundaryNorm]:
 
 
 def crop_field(field: Field) -> Field:
-    longitude_order = np.argsort(field.lon[0, :])
+    domain_center = (EXTENT[0] + EXTENT[1]) / 2.0
+    centered_lon = centered_longitudes(field.lon, domain_center)
+    longitude_order = np.argsort(centered_lon[0, :])
     data = field.data[:, longitude_order]
     lat = field.lat[:, longitude_order]
-    lon = field.lon[:, longitude_order]
-    west, east, south, north = EXTENT
+    lon = centered_lon[:, longitude_order]
+    west, east, south, north = SOURCE_EXTENT
     row_indices = np.flatnonzero(
-        (lat[:, 0] >= south - FIELD_BUFFER_DEGREES)
-        & (lat[:, 0] <= north + FIELD_BUFFER_DEGREES)
+        (lat[:, 0] >= south)
+        & (lat[:, 0] <= north)
     )
     column_indices = np.flatnonzero(
-        (lon[0, :] >= west - FIELD_BUFFER_DEGREES)
-        & (lon[0, :] <= east + FIELD_BUFFER_DEGREES)
+        (lon[0, :] >= west)
+        & (lon[0, :] <= east)
     )
     if not row_indices.size or not column_indices.size:
         raise ValueError("ECMWF field does not overlap the ensemble-spread plotting extent.")
