@@ -85,9 +85,13 @@ class HrdpsFourPanelTest(unittest.TestCase):
         self.assertTrue(all(left > right for left, right in zip(fourpanel.LI_LINEWIDTHS, fourpanel.LI_LINEWIDTHS[1:])))
         self.assertGreater(fourpanel.HGT500_LINEWIDTH, 1.25)
         self.assertGreater(fourpanel.HGT500_HALO_LINEWIDTH, fourpanel.HGT500_LINEWIDTH)
-        np.testing.assert_allclose(np.diff(fourpanel.HGT500_LEVELS_KM), 0.06)
+        self.assertEqual(fourpanel.HGT500_INTERVAL_KM, 0.06)
+        self.assertEqual(fourpanel.HGT500_ANCHOR_KM, 6.00)
+        np.testing.assert_allclose(np.diff(fourpanel.HGT500_LEVELS_KM), fourpanel.HGT500_INTERVAL_KM)
         self.assertIn(5.76, fourpanel.HGT500_LEVELS_KM)
         self.assertIn(5.82, fourpanel.HGT500_LEVELS_KM)
+        self.assertIn(6.00, fourpanel.HGT500_LEVELS_KM)
+        self.assertEqual(fourpanel.HGT500_LABEL_FORMAT % 6.00, "6.00")
 
     def test_850_temperature_style_groups_are_exclusive_and_complete(self) -> None:
         standard, zero, warm, hot = fourpanel.temp850_contour_groups()

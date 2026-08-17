@@ -35,6 +35,11 @@ class FakeEcmwfProvider(ensemble.EcmwfProvider):
 
 
 class EnsembleControlFourPanelTest(unittest.TestCase):
+    def test_500_hpa_height_contours_are_six_dam_and_anchored_at_600_dam(self) -> None:
+        np.testing.assert_allclose(np.diff(ensemble.HGT500_LEVELS_KM), 0.06)
+        self.assertIn(6.00, ensemble.HGT500_LEVELS_KM)
+        self.assertEqual(ensemble.HGT500_LABEL_FORMAT % 6.00, "6.00")
+
     def test_unit_vector_components_preserve_direction_and_normalize_length(self) -> None:
         u = np.array([[3.0, 0.0, np.nan]], dtype=np.float32)
         v = np.array([[4.0, -2.0, 1.0]], dtype=np.float32)

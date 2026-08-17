@@ -187,7 +187,13 @@ CAPE_SMOOTHING_KM = 10.0
 LI_LINEWIDTHS = (2.15, 2.00, 1.85, 1.75)
 HGT500_LINEWIDTH = 1.65
 HGT500_HALO_LINEWIDTH = 2.65
-HGT500_LEVELS_KM = np.round(np.arange(4.80, 6.30, 0.06), 2)
+HGT500_INTERVAL_KM = 0.06
+HGT500_ANCHOR_KM = 6.00
+HGT500_LEVELS_KM = np.round(
+    HGT500_ANCHOR_KM + HGT500_INTERVAL_KM * np.arange(-20, 5),
+    2,
+)
+HGT500_LABEL_FORMAT = "%.2f"
 TERRAIN_LEVELS_M = [0, 100, 250, 500, 750, 1000, 1250, 1500, 1750, 2000, 2500, 3500]
 TERRAIN_COLORS = [
     "#ead8b8",
@@ -636,7 +642,7 @@ def plot_fourpanel(
                 path_effects.Normal(),
             ]
         )
-    label_contours(hgt_ct, fontsize=5.4, fmt="%.2f")
+    label_contours(hgt_ct, fontsize=5.4, fmt=HGT500_LABEL_FORMAT)
     plot_barbs(ax, plot_lon, plot_lat, u250, v250, barb_stride, color="black", row_density=2.0, column_density=2.0)
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[-4, 0, 4, 8, 12, 16, 20, 24], label="$10^{-5}$ s$^{-1}$", fmt="%g")

@@ -29,6 +29,8 @@ import ecmwf_convective_data
 from make_hrdps_west_convective import RunInfo, WATERSHED_CACHE, parse_stamp, subset_slices
 from make_hrdps_west_fourpanel import (
     DATA_CRS,
+    HGT500_LABEL_FORMAT,
+    HGT500_LEVELS_KM,
     PANEL_PROJ,
     add_watersheds,
     decimate,
@@ -1161,8 +1163,17 @@ def plot_fourpanel(
         hgt500.data / 1000.0,
         stride=contour_stride,
     )
-    hgt_ct = ax.contour(clon, clat, chgt, levels=np.arange(4.8, 6.3, 0.12), colors="black", linewidths=1.35, transform=DATA_CRS, zorder=22)
-    label_contours(hgt_ct, fontsize=5.4, fmt="%.2g")
+    hgt_ct = ax.contour(
+        clon,
+        clat,
+        chgt,
+        levels=HGT500_LEVELS_KM,
+        colors="black",
+        linewidths=1.35,
+        transform=DATA_CRS,
+        zorder=22,
+    )
+    label_contours(hgt_ct, fontsize=5.4, fmt=HGT500_LABEL_FORMAT)
     plot_barbs(
         ax,
         u500.lon,
