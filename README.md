@@ -98,6 +98,23 @@ The publisher token is intentionally limited to bucket object read/write. Bucket
 CORS and lifecycle configuration therefore requires a separate administrative
 credential if `configure_r2_bucket.py` must be rerun.
 
+## Pipeline health monitoring
+
+`monitor_pipeline_health.py` checks the complete forecast pipeline each hour:
+required launch agents, the external data volume, public R2 model manifests,
+BCWS fire activity, the ECCC lightning archive, and daily CWFIS FFMC/DMC/DC
+anchors. Missing launch agents are reloaded automatically. Scheduler and disk
+failures alert immediately; remote failures must occur twice consecutively.
+
+Telegram alerts reuse `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from the
+existing Monitor Search environment, so credentials are not copied into this
+repository. A daily report is sent at 09:05 Pacific even when every check is
+healthy. Install or refresh both launch agents with:
+
+```bash
+scripts/launchd/install_pipeline_health_monitor.sh
+```
+
 ## Live fire activity
 
 Fire-weather forecast fields are immutable base PNGs. Current BCWS incidents
