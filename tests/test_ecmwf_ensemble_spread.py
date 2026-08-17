@@ -65,6 +65,8 @@ class EcmwfEnsembleSpreadTests(unittest.TestCase):
         site = (Path(__file__).resolve().parents[1] / "site/index.html").read_text()
         self.assertIn('<div class="category-title">Upper Levels</div>', site)
         self.assertIn('<span class="label">50.0kPa Hgt Mn|SD</span>', site)
+        self.assertLess(site.index(">Surface</div>"), site.index(">Upper Levels</div>"))
+        self.assertLess(site.index(">Upper Levels</div>"), site.index(">Verification</div>"))
 
 
 if __name__ == "__main__":
