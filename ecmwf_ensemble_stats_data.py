@@ -1,21 +1,41 @@
 #!/usr/bin/env python3
-"""Download compact ECMWF ENS 500 hPa mean and spread fields."""
+"""Access compact ECMWF ENS fields owned by the concrete forecast archive."""
 
 from __future__ import annotations
 
-import shutil
-import tempfile
+import os
+import subprocess
+import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
 from eccodes import codes_get, codes_grib_new_from_file, codes_release
 
-import project_paths
-
-
-DEFAULT_ARCHIVE_ROOT = project_paths.data_path("ecmwf_ensemble_stats")
+DEFAULT_CONCRETE_REPO = Path(
+    os.environ.get("CONCRETE_FCST_REPO_ROOT", "/Users/greg/projects/concrete_fcst")
+).expanduser()
+DEFAULT_CONCRETE_PYTHON = Path(
+    os.environ.get("CONCRETE_FCST_PYTHON", str(DEFAULT_CONCRETE_REPO / ".venv/bin/python"))
+).expanduser()
 PRODUCT_TYPES = ("em", "es")
+
+
+def concrete_archive_root(repo_root: Path = DEFAULT_CONCRETE_REPO) -> Path:
+    override = os.environ.get("CONCRETE_FCST_DATA_ROOT", "").strip()
+    if override:
+        data_root = Path(os.path.expandvars(override)).expanduser()
+    else:
+        config_path = repo_root / "configs/project.toml"
+        with config_path.open("rb") as handle:
+            configured = tomllib.load(handle)["paths"]["data_root"]
+        data_root = Path(os.path.expandvars(str(configured))).expanduser()
+        if not data_root.is_absolute():
+            data_root = repo_root / data_root
+    return data_root.resolve(strict=False) / "raw/ecmwf/realtime"
+
+
+DEFAULT_ARCHIVE_ROOT = concrete_archive_root()
 
 
 @dataclass(frozen=True)
@@ -73,56 +93,32 @@ def archive_has_hours(path: Path, data_type: str, hours: Iterable[int]) -> bool:
     return requested.issubset(grib_steps(path, data_type))
 
 
-def _download_statistic(
-    target: Path,
-    data_type: str,
+def _download_with_concrete_archive(
     date_label: str,
     cycle: str,
     hours: tuple[int, ...],
+    *,
+    force: bool,
 ) -> None:
-    try:
-        from ecmwf.opendata import Client
-    except ImportError as exc:
-        raise RuntimeError("ecmwf-opendata is required for ECMWF ENS downloads.") from exc
-
-    request = {
-        "date": date_label,
-        "time": int(cycle),
-        "stream": "enfo",
-        "type": data_type,
-        "step": list(hours),
-        "levtype": "pl",
-        "levelist": [500],
-        "param": ["gh"],
-    }
-    target.parent.mkdir(parents=True, exist_ok=True)
-    last_error: Exception | None = None
-    with tempfile.TemporaryDirectory(prefix=f"ecmwf-gh500-{data_type}-") as directory:
-        temporary = Path(directory) / target.name
-        # Google Cloud does not accept the multi-range request used by ECMWF's
-        # aggregated ensemble-statistics files. ECMWF and AWS do.
-        for source in ("ecmwf", "aws"):
-            temporary.unlink(missing_ok=True)
-            try:
-                Client(source=source, model="ifs", resol="0p25").retrieve(
-                    request=request,
-                    target=str(temporary),
-                )
-                if not archive_has_hours(temporary, data_type, hours):
-                    raise RuntimeError(
-                        f"Downloaded {data_type} GRIB does not contain every requested forecast hour."
-                    )
-                staged = target.with_suffix(target.suffix + ".tmp")
-                staged.unlink(missing_ok=True)
-                shutil.copy2(temporary, staged)
-                staged.replace(target)
-                return
-            except Exception as exc:
-                last_error = exc
-    assert last_error is not None
-    raise RuntimeError(
-        f"ECMWF ENS 500 hPa {data_type} download failed: {last_error}"
-    ) from last_error
+    command = [
+        str(DEFAULT_CONCRETE_PYTHON),
+        "-m",
+        "concrete_fcst.ingest.ecmwf_ensemble_stats",
+        "--repo-root",
+        str(DEFAULT_CONCRETE_REPO),
+        "--date",
+        date_label,
+        "--cycle",
+        str(int(cycle)),
+        "--hours",
+        *(str(hour) for hour in hours),
+    ]
+    if force:
+        command.append("--force")
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise RuntimeError(f"Concrete ECMWF ensemble-statistics archive failed: {detail}")
 
 
 def ensure_archives(
@@ -136,9 +132,25 @@ def ensure_archives(
     requested = tuple(sorted(set(int(hour) for hour in hours)))
     if not requested:
         raise ValueError("At least one ECMWF ENS forecast hour is required.")
+    if archive_root.resolve(strict=False) != DEFAULT_ARCHIVE_ROOT.resolve(strict=False):
+        raise ValueError(
+            "ECMWF ensemble-statistics downloads are owned by concrete_fcst; "
+            f"use its archive root at {DEFAULT_ARCHIVE_ROOT}."
+        )
     paths = archive_paths(date_label, cycle, archive_root)
+    if force or any(
+        not archive_has_hours(paths.for_type(data_type), data_type, requested)
+        for data_type in PRODUCT_TYPES
+    ):
+        _download_with_concrete_archive(
+            date_label,
+            cycle,
+            requested,
+            force=force,
+        )
     for data_type in PRODUCT_TYPES:
-        target = paths.for_type(data_type)
-        if force or not archive_has_hours(target, data_type, requested):
-            _download_statistic(target, data_type, date_label, cycle, requested)
+        if not archive_has_hours(paths.for_type(data_type), data_type, requested):
+            raise RuntimeError(
+                f"Concrete archive is incomplete for ECMWF {data_type} hours {requested[0]}-{requested[-1]}."
+            )
     return paths

@@ -10,6 +10,7 @@ import fcntl
 import json
 import os
 import signal
+import shutil
 import time
 from pathlib import Path
 from typing import Iterable
@@ -20,6 +21,7 @@ from make_hrdps_west_convective import RunInfo, parse_stamp
 
 
 JOB_STATE_ROOT = Path("logs/state")
+DEFAULT_LOCAL_PLOT_KEEP_DAYS = 7
 
 
 def log(message: str) -> None:
@@ -37,6 +39,12 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("--wait-minutes", type=int, default=180)
     parser.add_argument("--poll-minutes", type=int, default=10)
     parser.add_argument("--max-runtime-minutes", type=int, default=300)
+    parser.add_argument(
+        "--local-plot-keep-days",
+        type=int,
+        default=DEFAULT_LOCAL_PLOT_KEEP_DAYS,
+        help="Retain local rendered run directories for this many days.",
+    )
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--force-download", action="store_true")
     parser.add_argument("--no-legacy-pages-publish", action="store_true", help=argparse.SUPPRESS)
@@ -106,6 +114,33 @@ def plot_set_complete(output_dir: Path, stamp: str, hours: Iterable[int]) -> boo
     )
 
 
+def prune_local_plots(
+    output_dir: Path,
+    keep_days: int,
+    *,
+    now: dt.datetime | None = None,
+) -> list[Path]:
+    if keep_days < 0 or not output_dir.exists():
+        return []
+    reference = now or dt.datetime.now(dt.timezone.utc)
+    if reference.tzinfo is None:
+        reference = reference.replace(tzinfo=dt.timezone.utc)
+    cutoff = reference.astimezone(dt.timezone.utc) - dt.timedelta(days=keep_days)
+    removed: list[Path] = []
+    for child in output_dir.iterdir():
+        if not child.is_dir():
+            continue
+        try:
+            init_time = parse_stamp(child.name)
+        except ValueError:
+            continue
+        if init_time < cutoff:
+            shutil.rmtree(child)
+            removed.append(child)
+            log(f"Removed expired local ECMWF ENS plot run {child}.")
+    return removed
+
+
 def ensure_with_wait(
     run: RunInfo,
     hours: tuple[int, ...],
@@ -161,7 +196,14 @@ def main(argv: Iterable[str]) -> int:
                     spread_plot.make_plots(run, args.archive_root, args.output_dir, hours)
                 else:
                     log(f"Using existing complete ECMWF ENS plot set for {stamp}.")
-            write_status(args.cycle, "success", stamp=stamp, hours=list(hours))
+            removed = prune_local_plots(args.output_dir, args.local_plot_keep_days)
+            write_status(
+                args.cycle,
+                "success",
+                stamp=stamp,
+                hours=list(hours),
+                local_plot_runs_pruned=len(removed),
+            )
             return 0
         except Exception as exc:
             write_status(args.cycle, "failed", stamp=stamp, error=str(exc))

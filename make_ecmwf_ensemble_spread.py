@@ -22,7 +22,6 @@ import ecmwf_ensemble_stats_data as stats_data
 import plot_style
 import project_paths
 from make_ensemble_control_fourpanel import (
-    ECMWF_FORECAST_HOURS,
     Field,
     latest_cycle_stamp,
     read_matching_grib,
@@ -30,7 +29,12 @@ from make_ensemble_control_fourpanel import (
 from make_hrdps_west_convective import RunInfo, parse_stamp
 
 
-FORECAST_HOURS = ECMWF_FORECAST_HOURS
+ECMWF_THREE_HOURLY_END = 144
+ECMWF_ENSEMBLE_FORECAST_END = 360
+FORECAST_HOURS = (
+    tuple(range(0, ECMWF_THREE_HOURLY_END + 1, 3))
+    + tuple(range(ECMWF_THREE_HOURLY_END + 6, ECMWF_ENSEMBLE_FORECAST_END + 1, 6))
+)
 DATA_CRS = ccrs.PlateCarree()
 PLOT_CRS = ccrs.LambertConformal(
     central_longitude=-105.0,
@@ -304,7 +308,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument(
         "--hours",
         default=None,
-        help="Comma-separated hours; defaults to the operational schedule through F252.",
+        help="Comma-separated hours; defaults to the operational schedule through F360.",
     )
     parser.add_argument("--archive-root", type=Path, default=stats_data.DEFAULT_ARCHIVE_ROOT)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)

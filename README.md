@@ -44,6 +44,14 @@ precedence; without any configured root, development commands fall back to the
 repository's `data/` and `plots/` directories. A configured but unavailable
 root is an error so a missing SSD cannot silently fill internal storage.
 
+ECMWF ensemble-mean and spread GRIBs are durable forecast inputs owned by the
+`concrete_fcst` archive rather than graphic-specific caches. Forecast Graphics
+reads them from `${CONCRETE_FCST_DATA_ROOT}/raw/ecmwf/realtime` (or the data
+root in `concrete_fcst/configs/project.toml`) and invokes the concrete archive
+module when a 00Z or 12Z cycle is incomplete. `CONCRETE_FCST_REPO_ROOT`,
+`CONCRETE_FCST_DATA_ROOT`, and `CONCRETE_FCST_PYTHON` can override the local
+repository, data, and interpreter paths.
+
 ## R2 publication
 
 Synchronize retained frames for one model:
