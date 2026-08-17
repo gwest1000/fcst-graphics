@@ -370,6 +370,13 @@ def overall_level(checks: Iterable[CheckResult]) -> str:
 def report_body(checks: list[CheckResult], now: dt.datetime, daily: bool) -> str:
     level = overall_level(checks).upper()
     problems = [check for check in checks if check.level != "ok"]
+    storage = next((check for check in checks if check.key == "storage.runtime"), None)
+    if daily and not problems:
+        lines = [f"All {len(checks)}/{len(checks)} checks are healthy."]
+        if storage is not None:
+            lines.append(f"Disk: {storage.summary}")
+        return "\n".join(lines)
+
     lines = [f"Status: {level}", f"Checked: {now.astimezone(LOCAL_TZ):%Y-%m-%d %H:%M %Z}"]
     if problems:
         lines.append(f"Problems: {len(problems)}")
@@ -379,12 +386,8 @@ def report_body(checks: list[CheckResult], now: dt.datetime, daily: bool) -> str
             lines.append(f"...and {len(problems) - 20} more")
     else:
         lines.append(f"All {len(checks)} checks are healthy.")
-    if daily:
-        lines.append("")
-        lines.append("Feed summary:")
-        for check in checks:
-            if check.key.startswith(("manifest.", "feed.", "storage.")):
-                lines.append(f"{check.label}: {check.summary}")
+    if daily and storage is not None and storage not in problems:
+        lines.append(f"Disk: {storage.summary}")
     return "\n".join(lines)
 
 

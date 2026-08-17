@@ -108,8 +108,8 @@ failures alert immediately; remote failures must occur twice consecutively.
 
 Telegram alerts reuse `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from the
 existing Monitor Search environment, so credentials are not copied into this
-repository. A daily report is sent at 09:05 Pacific even when every check is
-healthy. Install or refresh both launch agents with:
+repository. A concise daily report is sent at 07:05 Pacific even when every
+check is healthy. Install or refresh both launch agents with:
 
 ```bash
 scripts/launchd/install_pipeline_health_monitor.sh

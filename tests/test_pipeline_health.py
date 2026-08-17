@@ -54,11 +54,22 @@ class PipelineHealthTests(unittest.TestCase):
         ]
         self.assertEqual(health.problem_signature(checks), "a:critical|b:warning")
 
-    def test_report_body_includes_daily_feed_summary(self):
-        checks = [health.CheckResult("feed.fire_activity", "Fires", "ok", "20 incidents")]
+    def test_healthy_daily_report_only_includes_count_and_disk(self):
+        checks = [
+            health.CheckResult("storage.runtime", "Storage", "ok", "887 GB free (44%)"),
+            health.CheckResult("feed.fire_activity", "Fires", "ok", "20 incidents"),
+        ]
         body = health.report_body(checks, NOW, daily=True)
-        self.assertIn("All 1 checks are healthy", body)
-        self.assertIn("Fires: 20 incidents", body)
+        self.assertEqual(body, "All 2/2 checks are healthy.\nDisk: 887 GB free (44%)")
+
+    def test_unhealthy_daily_report_includes_problem_details(self):
+        checks = [
+            health.CheckResult("storage.runtime", "Storage", "ok", "887 GB free (44%)"),
+            health.CheckResult("feed.fire_activity", "Fires", "critical", "feed unavailable"),
+        ]
+        body = health.report_body(checks, NOW, daily=True)
+        self.assertIn("[CRITICAL] Fires: feed unavailable", body)
+        self.assertIn("Disk: 887 GB free (44%)", body)
 
     @mock.patch("telegram_notify.urllib.request.urlopen")
     def test_telegram_client_uses_existing_environment_contract(self, urlopen):
