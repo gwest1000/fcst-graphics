@@ -15,16 +15,19 @@ import cartopy.crs as ccrs
 import cartopy.feature as cfeature
 import matplotlib.pyplot as plt
 import numpy as np
+from eccodes import codes_get, codes_grib_new_from_file, codes_release
 from matplotlib.colors import BoundaryNorm, ListedColormap
 from matplotlib.patches import Rectangle
+from scipy.ndimage import gaussian_filter
 
 import ecmwf_ensemble_stats_data as stats_data
 import plot_style
 import project_paths
 from make_ensemble_control_fourpanel import (
     Field,
+    grib_field_matches,
+    grib_values,
     latest_cycle_stamp,
-    read_matching_grib,
 )
 from make_hrdps_west_convective import RunInfo, parse_stamp
 
@@ -36,12 +39,27 @@ FORECAST_HOURS = (
     + tuple(range(ECMWF_THREE_HOURLY_END + 6, ECMWF_ENSEMBLE_FORECAST_END + 1, 6))
 )
 DATA_CRS = ccrs.PlateCarree()
+REFERENCE_EXTENT = (-172.0, -42.0, 9.0, 82.0)
+DOMAIN_SCALE = 0.85
+DOMAIN_EAST_LONGITUDE = -52.0
+DOMAIN_LONGITUDE_SPAN = (REFERENCE_EXTENT[1] - REFERENCE_EXTENT[0]) * DOMAIN_SCALE
+DOMAIN_LATITUDE_SPAN = (REFERENCE_EXTENT[3] - REFERENCE_EXTENT[2]) * DOMAIN_SCALE
+DOMAIN_LATITUDE_CENTER = (REFERENCE_EXTENT[2] + REFERENCE_EXTENT[3]) / 2.0
+EXTENT = (
+    DOMAIN_EAST_LONGITUDE - DOMAIN_LONGITUDE_SPAN,
+    DOMAIN_EAST_LONGITUDE,
+    DOMAIN_LATITUDE_CENTER - DOMAIN_LATITUDE_SPAN / 2.0,
+    DOMAIN_LATITUDE_CENTER + DOMAIN_LATITUDE_SPAN / 2.0,
+)
 PLOT_CRS = ccrs.LambertConformal(
-    central_longitude=-105.0,
-    central_latitude=48.0,
+    central_longitude=(EXTENT[0] + EXTENT[1]) / 2.0,
+    central_latitude=(EXTENT[2] + EXTENT[3]) / 2.0,
     standard_parallels=(30.0, 60.0),
 )
-EXTENT = (-172.0, -42.0, 9.0, 82.0)
+FIELD_BUFFER_DEGREES = 4.0
+MEAN_HEIGHT_SMOOTHING_SIGMA = 1.25
+GREEN_BLUE_BOUNDARY_KM = 0.05
+GREEN_BLUE_BOUNDARY_LINEWIDTH = 1.5
 HEIGHT_LEVELS_KM = np.arange(4.20, 6.421, 0.06)
 SPREAD_LEVELS_KM = np.asarray(
     [0.005, *[value / 100.0 for value in range(1, 31)]],
@@ -118,23 +136,88 @@ def spread_cmap_norm() -> tuple[ListedColormap, BoundaryNorm]:
 
 def crop_field(field: Field) -> Field:
     longitude_order = np.argsort(field.lon[0, :])
+    data = field.data[:, longitude_order]
+    lat = field.lat[:, longitude_order]
+    lon = field.lon[:, longitude_order]
+    west, east, south, north = EXTENT
+    row_indices = np.flatnonzero(
+        (lat[:, 0] >= south - FIELD_BUFFER_DEGREES)
+        & (lat[:, 0] <= north + FIELD_BUFFER_DEGREES)
+    )
+    column_indices = np.flatnonzero(
+        (lon[0, :] >= west - FIELD_BUFFER_DEGREES)
+        & (lon[0, :] <= east + FIELD_BUFFER_DEGREES)
+    )
+    if not row_indices.size or not column_indices.size:
+        raise ValueError("ECMWF field does not overlap the ensemble-spread plotting extent.")
+    yslice = slice(int(row_indices[0]), int(row_indices[-1]) + 1)
+    xslice = slice(int(column_indices[0]), int(column_indices[-1]) + 1)
     return Field(
-        data=field.data[:, longitude_order],
-        lat=field.lat[:, longitude_order],
-        lon=field.lon[:, longitude_order],
+        data=data[yslice, xslice],
+        lat=lat[yslice, xslice],
+        lon=lon[yslice, xslice],
         step_range=field.step_range,
     )
 
 
+def smooth_mean_height(data: np.ndarray) -> np.ndarray:
+    valid = np.isfinite(data)
+    if valid.all():
+        return gaussian_filter(data, sigma=MEAN_HEIGHT_SMOOTHING_SIGMA, mode="nearest")
+    weights = gaussian_filter(valid.astype(np.float32), sigma=MEAN_HEIGHT_SMOOTHING_SIGMA, mode="nearest")
+    values = gaussian_filter(np.where(valid, data, 0.0), sigma=MEAN_HEIGHT_SMOOTHING_SIGMA, mode="nearest")
+    return np.where(weights > 0.0, values / weights, np.nan)
+
+
+def read_field_set(
+    path: Path,
+    hours: Iterable[int],
+    *,
+    smooth: bool,
+) -> dict[int, Field]:
+    requested = {int(hour) for hour in hours}
+    fields: dict[int, Field] = {}
+    if not path.exists():
+        raise FileNotFoundError(path)
+    with path.open("rb") as handle:
+        while True:
+            gid = codes_grib_new_from_file(handle)
+            if gid is None:
+                break
+            try:
+                step = int(codes_get(gid, "step"))
+                if step not in requested or not grib_field_matches(
+                    gid,
+                    "gh",
+                    "isobaricInhPa",
+                    500,
+                    step,
+                ):
+                    continue
+                data, lat, lon = grib_values(gid)
+                field = crop_field(
+                    Field(
+                        data=data,
+                        lat=lat,
+                        lon=lon,
+                        step_range=str(codes_get(gid, "stepRange")),
+                    )
+                )
+                field.data = field.data / 1000.0
+                if smooth:
+                    field.data = smooth_mean_height(field.data)
+                fields[step] = field
+            finally:
+                codes_release(gid)
+    missing = requested.difference(fields)
+    if missing:
+        raise KeyError(f"Missing ECMWF 500 hPa fields at forecast hours {sorted(missing)} in {path}")
+    return fields
+
+
 def read_fields(paths: stats_data.ArchivePaths, fhour: int) -> tuple[Field, Field]:
-    mean = crop_field(
-        read_matching_grib(paths.mean, "gh", "isobaricInhPa", 500, fhour)
-    )
-    spread = crop_field(
-        read_matching_grib(paths.spread, "gh", "isobaricInhPa", 500, fhour)
-    )
-    mean.data = mean.data / 1000.0
-    spread.data = spread.data / 1000.0
+    mean = read_field_set(paths.mean, (fhour,), smooth=True)[fhour]
+    spread = read_field_set(paths.spread, (fhour,), smooth=False)[fhour]
     return mean, spread
 
 
@@ -211,10 +294,10 @@ def image_name(stamp: str, fhour: int) -> str:
 def make_plot(
     run: RunInfo,
     fhour: int,
-    paths: stats_data.ArchivePaths,
+    mean: Field,
+    spread: Field,
     output_dir: Path,
 ) -> Path:
-    mean, spread = read_fields(paths, fhour)
     cmap, norm = spread_cmap_norm()
 
     fig = plt.figure(
@@ -245,6 +328,16 @@ def make_plot(
         linewidths=0.40,
         transform=DATA_CRS,
         zorder=3,
+    )
+    ax.contour(
+        spread.lon,
+        spread.lat,
+        spread.data,
+        levels=[GREEN_BLUE_BOUNDARY_KM],
+        colors="#707070",
+        linewidths=GREEN_BLUE_BOUNDARY_LINEWIDTH,
+        transform=DATA_CRS,
+        zorder=4,
     )
     heights = ax.contour(
         mean.lon,
@@ -293,12 +386,24 @@ def make_plots(
     output_dir: Path,
     hours: Iterable[int],
 ) -> list[Path]:
+    requested = tuple(int(fhour) for fhour in hours)
     paths = stats_data.archive_paths(
         f"{run.init_time:%Y%m%d}",
         run.cycle,
         archive_root,
     )
-    return [make_plot(run, int(fhour), paths, output_dir) for fhour in hours]
+    mean_fields = read_field_set(paths.mean, requested, smooth=True)
+    spread_fields = read_field_set(paths.spread, requested, smooth=False)
+    return [
+        make_plot(
+            run,
+            fhour,
+            mean_fields[fhour],
+            spread_fields[fhour],
+            output_dir,
+        )
+        for fhour in requested
+    ]
 
 
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:

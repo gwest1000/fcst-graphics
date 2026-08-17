@@ -5,6 +5,8 @@ import datetime as dt
 from pathlib import Path
 import tempfile
 
+import numpy as np
+
 import automate_ecmwf_ensemble_spread as automation
 import ecmwf_ensemble_stats_data as stats_data
 import make_ecmwf_ensemble_spread as spread
@@ -28,6 +30,24 @@ class EcmwfEnsembleSpreadTests(unittest.TestCase):
         self.assertIn(144, spread.FORECAST_HOURS)
         self.assertNotIn(147, spread.FORECAST_HOURS)
         self.assertIn(150, spread.FORECAST_HOURS)
+
+    def test_domain_is_zoomed_and_anchored_near_eastern_newfoundland(self):
+        old_width = spread.REFERENCE_EXTENT[1] - spread.REFERENCE_EXTENT[0]
+        old_height = spread.REFERENCE_EXTENT[3] - spread.REFERENCE_EXTENT[2]
+        self.assertAlmostEqual((spread.EXTENT[1] - spread.EXTENT[0]) / old_width, 0.85)
+        self.assertAlmostEqual((spread.EXTENT[3] - spread.EXTENT[2]) / old_height, 0.85)
+        self.assertAlmostEqual(spread.EXTENT[1], -52.0)
+
+    def test_mean_height_smoothing_reduces_grid_scale_noise(self):
+        field = np.zeros((9, 9), dtype=float)
+        field[4, 4] = 1.0
+        smoothed = spread.smooth_mean_height(field)
+        self.assertLess(smoothed[4, 4], 1.0)
+        self.assertGreater(smoothed[4, 5], 0.0)
+
+    def test_green_blue_boundary_is_emphasized(self):
+        self.assertEqual(spread.GREEN_BLUE_BOUNDARY_KM, 0.05)
+        self.assertGreater(spread.GREEN_BLUE_BOUNDARY_LINEWIDTH, 1.0)
 
     def test_archive_paths_keep_mean_and_spread_separate(self):
         paths = stats_data.archive_paths("20260817", "00", Path("/tmp/ecmwf-stats-test"))
@@ -60,6 +80,8 @@ class EcmwfEnsembleSpreadTests(unittest.TestCase):
         self.assertIn(key, publisher.PRODUCTS_BY_MODEL["ecmwf_ensemble"])
         self.assertIn(key, r2_publish.MODEL_PRODUCTS["ecmwf_ensemble"])
         self.assertEqual(publisher.PRODUCTS[key].model, "ECMWF ENS")
+        self.assertEqual(publisher.PRODUCTS[key].category, "Upper Levels")
+        self.assertEqual(publisher.PRODUCTS[key].hours[-1], 360)
 
     def test_viewer_places_product_under_upper_levels(self):
         site = (Path(__file__).resolve().parents[1] / "site/index.html").read_text()
