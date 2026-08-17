@@ -1222,6 +1222,7 @@
       function preloadFrames() {
         frames.forEach((frame) => {
           const img = new Image();
+          img.crossOrigin = "anonymous";
           img.src = frame.href;
         });
       }

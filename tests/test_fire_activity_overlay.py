@@ -119,6 +119,7 @@ class FireActivityOverlayTests(unittest.TestCase):
         self.assertIn('compositeCanvas.toBlob((blob) => {', html)
         self.assertIn('}, "image/png");', html)
         self.assertIn("const compositeFrameUrls = new Map();", html)
+        self.assertIn('img.crossOrigin = "anonymous";', html)
         self.assertIn("60 * 60 * 1000", html)
 
 
