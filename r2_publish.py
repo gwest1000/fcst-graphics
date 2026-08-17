@@ -63,6 +63,7 @@ MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
         "ecmwf_control_fourpanel",
         "ecmwf_control_convective_fourpanel",
     ),
+    "ecmwf_ensemble": ("ecmwf_ensemble_spread_500",),
 }
 
 DEFAULT_PRODUCTS = {
@@ -70,6 +71,7 @@ DEFAULT_PRODUCTS = {
     "west": "lightning_sw",
     "gefs_control": "gefs_control_fourpanel",
     "ecmwf_control": "ecmwf_control_fourpanel",
+    "ecmwf_ensemble": "ecmwf_ensemble_spread_500",
 }
 
 RETIRED_PRODUCTS: dict[str, tuple[str, ...]] = {

@@ -23,6 +23,8 @@ from make_hrdps_west_lightning import FORECAST_HOURS as LIGHTNING_FORECAST_HOURS
 from make_hrdps_wind import FORECAST_HOURS as WIND_FORECAST_HOURS
 from make_hrdps_evolved_danger_class import FORECAST_HOURS as FWI2025_DANGER_FORECAST_HOURS
 from make_hrdps_temperature import FORECAST_HOURS as TEMPERATURE_FORECAST_HOURS
+from make_ecmwf_ensemble_spread import FORECAST_HOURS as ECMWF_ENSEMBLE_FORECAST_HOURS
+import project_paths
 
 DEFAULT_PAGES_REPO = Path("/Users/greg/projects/fcstpp-reports-pages")
 STAMP_RE = re.compile(r"^\d{8}T\d{2}Z$")
@@ -277,6 +279,19 @@ PRODUCTS: dict[str, ProductConfig] = {
         archive_subdir="ecmwf/control/convective_fourpanel",
         model_key="ecmwf_control",
     ),
+    "ecmwf_ensemble_spread_500": ProductConfig(
+        key="ecmwf_ensemble_spread_500",
+        prefix="ecmwf_ensemble_spread_500",
+        label="500 hPa Mean & Spread",
+        category="Ensemble",
+        plot_type="500 hPa Mean & Spread",
+        area="North America",
+        model="ECMWF ENS",
+        description="ECMWF 51-member ensemble-mean 500 hPa geopotential height contoured every 0.06 km, with ensemble standard deviation shaded and contoured from 0.005 to 0.30 km. Forecasts are 3-hourly through F144 and 6-hourly through F252.",
+        hours=ECMWF_ENSEMBLE_FORECAST_HOURS,
+        archive_subdir="ecmwf/ensemble/spread500",
+        model_key="ecmwf_ensemble",
+    ),
     "gefs_control_fourpanel": ProductConfig(
         key="gefs_control_fourpanel",
         prefix="gefs_control_fourpanel",
@@ -315,6 +330,7 @@ PRODUCTS_BY_MODEL = {
         "ecmwf_control_fourpanel",
         "ecmwf_control_convective_fourpanel",
     ),
+    "ecmwf_ensemble": ("ecmwf_ensemble_spread_500",),
     "gefs_control": ("gefs_control_fourpanel",),
 }
 
@@ -396,31 +412,33 @@ def available_image_names(plot_dir: Path, stamp: str, product_key: str) -> list[
 
 def default_plot_dir_for_product(product_key: str, model: str) -> Path:
     if product_key == "fire_danger_verif":
-        return Path("plots/fire_danger_verification")
+        return project_paths.plot_path("fire_danger_verification")
     if product_key.endswith("lightning_verif"):
         if product_key.startswith("continental_"):
-            return Path("plots/hrdps_continental_lightning_verif")
-        return Path("plots/hrdps_west_lightning_verif")
+            return project_paths.plot_path("hrdps_continental_lightning_verif")
+        return project_paths.plot_path("hrdps_west_lightning_verif")
     if product_key.startswith("continental_lightning"):
-        return Path("plots/hrdps_continental_lightning")
+        return project_paths.plot_path("hrdps_continental_lightning")
     if product_key.startswith("lightning"):
-        return Path("plots/hrdps_west_lightning")
+        return project_paths.plot_path("hrdps_west_lightning")
     if product_key == "wind_south_coast":
-        return Path("plots/hrdps_west_lightning")
+        return project_paths.plot_path("hrdps_west_lightning")
     if product_key == "continental_temperature":
-        return Path("plots/hrdps_continental_temperature")
+        return project_paths.plot_path("hrdps_continental_temperature")
     if product_key.startswith("temperature"):
-        return Path("plots/hrdps_west_temperature")
+        return project_paths.plot_path("hrdps_west_temperature")
     if product_key.endswith("fwi2025_danger"):
-        return Path("plots/experimental_fwi2025_danger")
+        return project_paths.plot_path("experimental_fwi2025_danger")
     if product_key == "continental_fourpanel":
-        return Path("plots/hrdps_continental_fourpanel")
+        return project_paths.plot_path("hrdps_continental_fourpanel")
     if product_key == "fourpanel":
-        return Path("plots/hrdps_west_fourpanel")
+        return project_paths.plot_path("hrdps_west_fourpanel")
     if product_key in {"ecmwf_control_fourpanel", "ecmwf_control_convective_fourpanel"}:
-        return Path("plots/ecmwf_control_fourpanel")
+        return project_paths.plot_path("ecmwf_control_fourpanel")
+    if product_key == "ecmwf_ensemble_spread_500":
+        return project_paths.plot_path("ecmwf_ensemble_spread")
     if product_key == "gefs_control_fourpanel":
-        return Path("plots/gefs_control_fourpanel")
+        return project_paths.plot_path("gefs_control_fourpanel")
     raise ValueError(f"Unsupported product for {model}: {product_key}")
 
 

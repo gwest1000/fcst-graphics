@@ -55,7 +55,7 @@ PLIST
   launchctl enable "gui/${UID}/${label}"
 }
 
-for model in continental west gefs_control ecmwf_control; do
+for model in continental west gefs_control ecmwf_control ecmwf_ensemble; do
   install_r2_agent "${model}"
 done
 

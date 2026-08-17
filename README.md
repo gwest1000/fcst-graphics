@@ -6,6 +6,7 @@ Operational forecast-map generation and publication for:
 - HRDPS-West 1 km
 - GEFS control
 - ECMWF IFS control
+- ECMWF ENS 500 hPa mean and spread
 
 The HRDPS surface products include three-hourly 2 m temperature for the
 BC-wide HRDPS 2.5 km domain and the Southern BC and Northern BC HRDPS-West
@@ -26,6 +27,23 @@ cp .env.example .env
 
 Do not commit `.env` or R2 credentials.
 
+## Runtime storage
+
+Machine-level storage is configured in `~/.config/project-data.env`:
+
+```text
+PROJECT_DATA_ROOT=/Volumes/Greg1_2tb/project-data
+```
+
+Forecast Graphics then uses `${PROJECT_DATA_ROOT}/fcstGraphics/data` for
+downloaded model fields and durable caches, and
+`${PROJECT_DATA_ROOT}/fcstGraphics/plots` for generated frames. Static tracked
+map assets remain in the repository's `data/` directory. The project-specific
+`FCSTGRAPHICS_DATA_ROOT` and `FCSTGRAPHICS_PLOTS_ROOT` variables take
+precedence; without any configured root, development commands fall back to the
+repository's `data/` and `plots/` directories. A configured but unavailable
+root is an error so a missing SSD cannot silently fill internal storage.
+
 ## R2 publication
 
 Synchronize retained frames for one model:
@@ -35,10 +53,10 @@ Synchronize retained frames for one model:
 ```
 
 Supported model publication groups are `continental`, `west`, `gefs_control`,
-and `ecmwf_control`. Verification products are included in their associated
-HRDPS manifests.
+`ecmwf_control`, and `ecmwf_ensemble`. Verification products are included in
+their associated HRDPS manifests.
 
-Install or refresh only the four independent R2 publication workers with:
+Install or refresh the independent R2 publication workers with:
 
 ```bash
 scripts/launchd/install_r2_launch_agents.sh

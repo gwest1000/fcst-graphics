@@ -9,6 +9,7 @@ LOG_DIR="${REPO_ROOT}/logs"
 PYTHON_BIN="${REPO_ROOT}/.venv/bin/python"
 AUTOMATION="${REPO_ROOT}/automate_hrdps_west.py"
 ENSEMBLE_RUNNER="${REPO_ROOT}/scripts/launchd/run_ensemble_control_fourpanel.sh"
+ECMWF_SPREAD_RUNNER="${REPO_ROOT}/scripts/launchd/run_ecmwf_ensemble_spread.sh"
 LPI_VERIFICATION_AUTOMATION="${REPO_ROOT}/automate_lpi_verification.py"
 FIRE_DANGER_VERIFICATION_AUTOMATION="${REPO_ROOT}/automate_fire_danger_verification.py"
 ONLY_LABEL="${1:-}"
@@ -101,6 +102,7 @@ install_ensemble_agent() {
   local hour="$4"
   local minute="$5"
   local log_prefix="$6"
+  local runner="${7:-${ENSEMBLE_RUNNER}}"
   local target="${AGENT_DIR}/${label}.plist"
 
   cat > "${target}" <<PLIST
@@ -122,7 +124,7 @@ install_ensemble_agent() {
   <key>ProgramArguments</key>
   <array>
     <string>/bin/zsh</string>
-    <string>${ENSEMBLE_RUNNER}</string>
+    <string>${runner}</string>
     <string>--model</string>
     <string>${model}</string>
     <string>--cycle</string>
@@ -159,6 +161,8 @@ PLIST
 selected "com.greg.gefs-control-fourpanel-00" && install_ensemble_agent "com.greg.gefs-control-fourpanel-00" "gefs_control" "0" "5" "0" "gefs_control_00"
 selected "com.greg.ecmwf-control-fourpanel-00" && install_ensemble_agent "com.greg.ecmwf-control-fourpanel-00" "ecmwf_control" "0" "5" "30" "ecmwf_control_00"
 selected "com.greg.ecmwf-control-fourpanel-12" && install_ensemble_agent "com.greg.ecmwf-control-fourpanel-12" "ecmwf_control" "12" "13" "0" "ecmwf_control_12"
+selected "com.greg.ecmwf-ensemble-spread-00" && install_ensemble_agent "com.greg.ecmwf-ensemble-spread-00" "ecmwf_ensemble" "0" "6" "0" "ecmwf_ensemble_00" "${ECMWF_SPREAD_RUNNER}"
+selected "com.greg.ecmwf-ensemble-spread-12" && install_ensemble_agent "com.greg.ecmwf-ensemble-spread-12" "ecmwf_ensemble" "12" "13" "30" "ecmwf_ensemble_12" "${ECMWF_SPREAD_RUNNER}"
 
 install_interval_agent() {
   local label="$1"

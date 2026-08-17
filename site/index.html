@@ -534,6 +534,22 @@
             </div>
           </li>
           <li class="category">
+            <div class="category-title">Ensemble</div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="ecmwf_ensemble_spread">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">500 hPa Mean &amp; Spread</span>
+            </button>
+            <div class="submenu" data-plot-panel="ecmwf_ensemble_spread">
+              <button class="menu-button area" type="button" data-area-toggle="ecmwf_ensemble_spread">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">North America</span>
+              </button>
+              <div class="submenu" data-model-panel="ecmwf_ensemble_spread">
+                <button class="menu-button model" type="button" data-product-select="ecmwf_ensemble_spread_500">ECMWF ENS</button>
+              </div>
+            </div>
+          </li>
+          <li class="category">
             <div class="category-title">Surface</div>
             <button class="menu-button ptype" type="button" data-plot-toggle="wind">
               <span class="chevron" aria-hidden="true"></span>
@@ -758,6 +774,7 @@
       const plotGroups = {
         fourpanel: ["continental_fourpanel", "ecmwf_control_convective_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
+        ecmwf_ensemble_spread: ["ecmwf_ensemble_spread_500"],
         wind: ["wind_south_coast"],
         lightning: [
           "continental_lightning_twopanel",
@@ -777,6 +794,7 @@
       const areaGroups = {
         fourpanel: ["continental_fourpanel", "ecmwf_control_convective_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
+        ecmwf_ensemble_spread: ["ecmwf_ensemble_spread_500"],
         wind_south_coast: ["wind_south_coast"],
         lightning_bc: ["continental_lightning_twopanel"],
         lightning_sw: ["lightning_sw"],
@@ -792,6 +810,7 @@
       const areaPlotGroups = {
         fourpanel: "fourpanel",
         synoptic_fourpanel: "synoptic_fourpanel",
+        ecmwf_ensemble_spread: "ecmwf_ensemble_spread",
         wind_south_coast: "wind",
         lightning_bc: "lightning",
         lightning_sw: "lightning",
@@ -889,7 +908,8 @@
           productFor(activeRun, "continental_fourpanel") ||
           productFor(activeRun, "ecmwf_control_convective_fourpanel") ||
           productFor(activeRun, "ecmwf_control_fourpanel") ||
-          productFor(activeRun, "gefs_control_fourpanel")
+          productFor(activeRun, "gefs_control_fourpanel") ||
+          productFor(activeRun, "ecmwf_ensemble_spread_500")
         );
       }
 
@@ -1025,6 +1045,7 @@
         const isEcmwfControl = [
           "ecmwf_control_fourpanel",
           "ecmwf_control_convective_fourpanel",
+          "ecmwf_ensemble_spread_500",
         ].includes(activeProductKey);
         frames.forEach((frame, index) => {
           const isEndpoint = !isEcmwfControl && (index === 0 || index === frames.length - 1);
@@ -1110,6 +1131,7 @@
             "ecmwf_control_convective_fourpanel",
             "ecmwf_control_fourpanel",
             "gefs_control_fourpanel",
+            "ecmwf_ensemble_spread_500",
           ].find((key) => Boolean(productFor(activeRun, key)));
           if (fallbackProduct) {
             activeProductKey = fallbackProduct;
