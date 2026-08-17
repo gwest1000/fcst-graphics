@@ -59,7 +59,9 @@ class EcmwfEnsembleSpreadTests(unittest.TestCase):
 
     def test_green_blue_boundary_is_emphasized(self):
         self.assertEqual(spread.GREEN_BLUE_BOUNDARY_KM, 0.05)
-        self.assertGreater(spread.GREEN_BLUE_BOUNDARY_LINEWIDTH, 1.0)
+        self.assertEqual(spread.SPREAD_CONTOUR_LINEWIDTH, 0.48)
+        self.assertEqual(spread.HEIGHT_CONTOUR_LINEWIDTH, 1.50)
+        self.assertEqual(spread.GREEN_BLUE_BOUNDARY_LINEWIDTH, 1.80)
 
     def test_archive_paths_keep_mean_and_spread_separate(self):
         paths = stats_data.archive_paths("20260817", "00", Path("/tmp/ecmwf-stats-test"))

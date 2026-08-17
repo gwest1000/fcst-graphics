@@ -59,8 +59,10 @@ PLOT_CRS = ccrs.LambertConformal(
 PROJECTION_EDGE_SAMPLES = 721
 SOURCE_COVERAGE_MARGIN_DEGREES = 2.0
 MEAN_HEIGHT_SMOOTHING_SIGMA = 1.25
+SPREAD_CONTOUR_LINEWIDTH = 0.48
+HEIGHT_CONTOUR_LINEWIDTH = 1.50
 GREEN_BLUE_BOUNDARY_KM = 0.05
-GREEN_BLUE_BOUNDARY_LINEWIDTH = 1.5
+GREEN_BLUE_BOUNDARY_LINEWIDTH = 1.80
 HEIGHT_LEVELS_KM = np.arange(4.20, 6.421, 0.06)
 SPREAD_LEVELS_KM = np.asarray(
     [0.005, *[value / 100.0 for value in range(1, 31)]],
@@ -392,7 +394,7 @@ def make_plot(
         spread.data,
         levels=SPREAD_LEVELS_KM[1:],
         colors="white",
-        linewidths=0.40,
+        linewidths=SPREAD_CONTOUR_LINEWIDTH,
         transform=DATA_CRS,
         zorder=3,
     )
@@ -412,7 +414,7 @@ def make_plot(
         mean.data,
         levels=HEIGHT_LEVELS_KM,
         colors="black",
-        linewidths=1.25,
+        linewidths=HEIGHT_CONTOUR_LINEWIDTH,
         transform=DATA_CRS,
         zorder=8,
     )
