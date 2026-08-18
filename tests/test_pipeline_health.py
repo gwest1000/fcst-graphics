@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import subprocess
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from unittest import mock
 
 import monitor_pipeline_health as health
@@ -38,7 +41,7 @@ class PipelineHealthTests(unittest.TestCase):
         result = health.check_fire_manifest(NOW, "https://example.test", lambda _url: payload)
         self.assertEqual(result.level, "critical")
 
-    def test_remote_failures_are_debounced_but_services_are_immediate(self):
+    def test_transient_failures_are_debounced_but_unrepaired_services_are_immediate(self):
         remote = health.CheckResult("manifest.west", "West", "critical", "offline")
         service = health.CheckResult("service.x", "Service", "critical", "missing", immediate=True)
         checks, counts = health.apply_debounce([remote, service], {})
@@ -46,6 +49,19 @@ class PipelineHealthTests(unittest.TestCase):
         self.assertEqual(checks[1].level, "critical")
         checks, _ = health.apply_debounce([remote], {"failure_counts": counts})
         self.assertEqual(checks[0].level, "critical")
+
+    @mock.patch("monitor_pipeline_health.launchctl_print")
+    def test_service_exit_code_is_explained_and_debounced(self, launchctl_print):
+        launchctl_print.return_value = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="state = not running\nlast exit code = 75\n",
+            stderr="",
+        )
+        result = health.check_launch_agent("com.greg.fcst-fire-activity-overlay")
+        self.assertEqual(result.label, "Hourly active-fire overlay")
+        self.assertFalse(result.immediate)
+        self.assertIn("temporary failure", result.summary)
 
     def test_problem_signature_is_stable(self):
         checks = [
@@ -68,8 +84,16 @@ class PipelineHealthTests(unittest.TestCase):
             health.CheckResult("feed.fire_activity", "Fires", "critical", "feed unavailable"),
         ]
         body = health.report_body(checks, NOW, daily=True)
-        self.assertIn("[CRITICAL] Fires: feed unavailable", body)
+        self.assertIn("[CRITICAL] Fires", body)
+        self.assertIn("Issue: feed unavailable", body)
+        self.assertIn("Active-fire symbols may be outdated", body)
         self.assertIn("Disk: 887 GB free (44%)", body)
+
+    def test_history_keeps_an_auditable_json_line(self):
+        with TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir) / "history.jsonl"
+            health.append_history(path, {"updated": "now", "problem": "example"})
+            self.assertEqual(json.loads(path.read_text()), {"updated": "now", "problem": "example"})
 
     @mock.patch("telegram_notify.urllib.request.urlopen")
     def test_telegram_client_uses_existing_environment_contract(self, urlopen):

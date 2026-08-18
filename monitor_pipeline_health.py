@@ -10,7 +10,6 @@ import os
 import re
 import shutil
 import subprocess
-import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -23,6 +22,8 @@ import telegram_notify
 PUBLIC_BASE_URL = "https://pub-969ec1fc2e19465797efb65b276a58da.r2.dev"
 STATE_PATH = Path("logs/state/pipeline_health.json")
 LATEST_PATH = Path("logs/pipeline_health_latest.json")
+HISTORY_PATH = Path("logs/pipeline_health_history.jsonl")
+HISTORY_MAX_BYTES = 25_000_000
 MACHINE_DATA_CONFIG = Path("~/.config/project-data.env").expanduser()
 LOCAL_TZ = ZoneInfo("America/Vancouver")
 
@@ -78,6 +79,50 @@ REQUIRED_LAUNCH_AGENTS = (
     "com.greg.fcst-pipeline-health",
     "com.greg.fcst-pipeline-health-daily",
 )
+
+LAUNCH_AGENT_LABELS = {
+    "com.greg.hrdps-west-convective-00": "HRDPS-West 00Z retrieval and plotting",
+    "com.greg.hrdps-west-convective-12": "HRDPS-West 12Z retrieval and plotting",
+    "com.greg.hrdps-continental-00": "HRDPS 2.5 km 00Z retrieval and plotting",
+    "com.greg.hrdps-continental-06": "HRDPS 2.5 km 06Z retrieval and plotting",
+    "com.greg.hrdps-continental-12": "HRDPS 2.5 km 12Z retrieval and plotting",
+    "com.greg.hrdps-continental-18": "HRDPS 2.5 km 18Z retrieval and plotting",
+    "com.greg.gefs-control-fourpanel-00": "GEFS Control retrieval and plotting",
+    "com.greg.ecmwf-control-fourpanel-00": "ECMWF Control 00Z retrieval and plotting",
+    "com.greg.ecmwf-control-fourpanel-12": "ECMWF Control 12Z retrieval and plotting",
+    "com.greg.ecmwf-ensemble-spread-00": "ECMWF Ensemble 00Z retrieval and plotting",
+    "com.greg.ecmwf-ensemble-spread-12": "ECMWF Ensemble 12Z retrieval and plotting",
+    "com.greg.lpi-verification": "Lightning observation and LPI verification",
+    "com.greg.fire-danger-verification": "Fire-danger verification",
+    "com.greg.fcst-fire-activity-overlay": "Hourly active-fire overlay",
+    "com.greg.fcst-r2-continental": "HRDPS 2.5 km web publisher",
+    "com.greg.fcst-r2-west": "HRDPS-West web publisher",
+    "com.greg.fcst-r2-gefs_control": "GEFS Control web publisher",
+    "com.greg.fcst-r2-ecmwf_control": "ECMWF Control web publisher",
+    "com.greg.fcst-r2-ecmwf_ensemble": "ECMWF Ensemble web publisher",
+    "com.greg.fcst-r2-usage-monitor": "R2 usage monitor",
+    "com.greg.fcst-r2-usage-weekly-report": "R2 weekly usage report",
+    "com.greg.fcst-pipeline-health": "Hourly forecast health monitor",
+    "com.greg.fcst-pipeline-health-daily": "Daily forecast health report",
+}
+
+EXIT_CODE_MEANINGS = {
+    1: "general program failure",
+    2: "invalid command or missing input",
+    64: "invalid command-line usage",
+    65: "invalid input data",
+    66: "required input file was unavailable",
+    69: "required network service was unavailable",
+    70: "internal software error",
+    71: "operating-system error",
+    72: "critical operating-system file was unavailable",
+    73: "output file could not be created",
+    74: "input/output error",
+    75: "temporary failure that may succeed on retry",
+    76: "communications protocol error",
+    77: "permission denied",
+    78: "configuration error",
+}
 
 
 def utc_now() -> dt.datetime:
@@ -288,21 +333,46 @@ def reload_launch_agent(label: str) -> bool:
     return result.returncode == 0 or launchctl_print(label).returncode == 0
 
 
+def exit_code_description(code: int) -> str:
+    if code < 0:
+        return f"terminated by signal {-code}"
+    if code >= 128:
+        return f"terminated by signal {code - 128}"
+    return EXIT_CODE_MEANINGS.get(code, "nonzero exit; the program reported a failure")
+
+
 def check_launch_agent(label: str, auto_repair: bool = True) -> CheckResult:
-    short = label.removeprefix("com.greg.")
+    short = LAUNCH_AGENT_LABELS.get(label, label.removeprefix("com.greg."))
     result = launchctl_print(label)
     repaired = False
     if result.returncode != 0 and auto_repair:
         repaired = reload_launch_agent(label)
         result = launchctl_print(label)
     if result.returncode != 0:
-        return CheckResult(f"service.{label}", short, "critical", "launch agent is not loaded", immediate=True)
+        return CheckResult(
+            f"service.{label}",
+            short,
+            "critical",
+            "schedule is not loaded and automatic repair failed",
+            immediate=True,
+        )
     if repaired:
-        return CheckResult(f"service.{label}", short, "warning", "was unloaded and was reloaded automatically", immediate=True)
+        return CheckResult(
+            f"service.{label}",
+            short,
+            "warning",
+            "schedule was unloaded and was reloaded automatically",
+        )
     match = re.search(r"last exit code = (-?\d+)", result.stdout)
     if match and int(match.group(1)) != 0:
-        return CheckResult(f"service.{label}", short, "warning", f"last exit code {match.group(1)}", immediate=True)
-    return CheckResult(f"service.{label}", short, "ok", "loaded", immediate=True)
+        code = int(match.group(1))
+        return CheckResult(
+            f"service.{label}",
+            short,
+            "warning",
+            f"last scheduled attempt failed with exit code {code} ({exit_code_description(code)})",
+        )
+    return CheckResult(f"service.{label}", short, "ok", "schedule loaded")
 
 
 def run_checks(
@@ -339,6 +409,16 @@ def write_json(path: Path, payload: Mapping[str, object]) -> None:
     temporary.replace(path)
 
 
+def append_history(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size >= HISTORY_MAX_BYTES:
+        rotated = path.with_suffix(path.suffix + ".1")
+        rotated.unlink(missing_ok=True)
+        path.replace(rotated)
+    with path.open("a") as handle:
+        handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
+
+
 def apply_debounce(
     checks: Iterable[CheckResult],
     previous_state: Mapping[str, object],
@@ -367,6 +447,26 @@ def overall_level(checks: Iterable[CheckResult]) -> str:
     return max((check.level for check in checks), default="ok", key=SEVERITY_ORDER.get)
 
 
+def operational_impact(check: CheckResult) -> str:
+    if check.key == "storage.runtime":
+        return "New downloads and graphics may fail; already-published graphics should remain online."
+    if check.key.startswith("manifest."):
+        return "The website may be serving an older model run while the new run is delayed."
+    if check.key == "feed.fire_activity":
+        return "Active-fire symbols may be outdated; the underlying model forecast fields are unaffected."
+    if check.key == "feed.lightning_archive":
+        return "Lightning verification and later LPI tuning may have a data gap; forecast LPI fields are unaffected."
+    if check.key == "feed.cwfis_anchors":
+        return "Experimental fire-danger guidance may be anchored to older FFMC, DMC, or DC values."
+    if check.key.startswith("service."):
+        if "reloaded automatically" in check.summary:
+            return "The schedule was restored automatically; no missing product has been confirmed."
+        if "automatic repair failed" in check.summary:
+            return "Future updates for this component will not run until its schedule is restored."
+        return "Existing graphics remain online, but the next update from this component may be delayed."
+    return "This component may not update on schedule."
+
+
 def report_body(checks: list[CheckResult], now: dt.datetime, daily: bool) -> str:
     level = overall_level(checks).upper()
     problems = [check for check in checks if check.level != "ok"]
@@ -381,7 +481,9 @@ def report_body(checks: list[CheckResult], now: dt.datetime, daily: bool) -> str
     if problems:
         lines.append(f"Problems: {len(problems)}")
         for check in problems[:20]:
-            lines.append(f"[{check.level.upper()}] {check.label}: {check.summary}")
+            lines.append(f"[{check.level.upper()}] {check.label}")
+            lines.append(f"Issue: {check.summary}")
+            lines.append(f"Impact: {operational_impact(check)}")
         if len(problems) > 20:
             lines.append(f"...and {len(problems) - 20} more")
     else:
@@ -395,6 +497,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-path", type=Path, default=STATE_PATH)
     parser.add_argument("--latest-path", type=Path, default=LATEST_PATH)
+    parser.add_argument("--history-path", type=Path, default=HISTORY_PATH)
     parser.add_argument("--always-notify", action="store_true", help="Send the daily heartbeat even when healthy.")
     parser.add_argument("--no-notify", action="store_true")
     parser.add_argument("--no-auto-repair", action="store_true")
@@ -452,9 +555,11 @@ def main(argv: Iterable[str]) -> int:
     payload["notification_error"] = notification_error
     write_json(args.latest_path, payload)
     write_json(args.state_path, payload)
+    append_history(args.history_path, payload)
     healthy = sum(check.level == "ok" for check in checks)
     print(
-        f"Pipeline health: level={payload['overall_level']}, healthy={healthy}/{len(checks)}, "
+        f"{now.astimezone(LOCAL_TZ):%Y-%m-%d %H:%M:%S %Z} Pipeline health: "
+        f"level={payload['overall_level']}, healthy={healthy}/{len(checks)}, "
         f"problems={len(checks) - healthy}, notified={notification_sent}",
         flush=True,
     )

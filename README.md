@@ -103,8 +103,11 @@ credential if `configure_r2_bucket.py` must be rerun.
 `monitor_pipeline_health.py` checks the complete forecast pipeline each hour:
 required launch agents, the external data volume, public R2 model manifests,
 BCWS fire activity, the ECCC lightning archive, and daily CWFIS FFMC/DMC/DC
-anchors. Missing launch agents are reloaded automatically. Scheduler and disk
-failures alert immediately; remote failures must occur twice consecutively.
+anchors. Missing launch agents are reloaded automatically. Disk loss and failed
+scheduler repair alert immediately. A scheduler exit code, successful automatic
+repair, or remote failure must still be present at the next hourly check before
+it sends a push alert. Each run is retained in a rotating JSONL history so an
+alert can be investigated after recovery.
 
 Telegram alerts reuse `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from the
 existing Monitor Search environment, so credentials are not copied into this
