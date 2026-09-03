@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import shutil
 import subprocess
 import unittest
 from pathlib import Path
@@ -133,6 +134,29 @@ class PipelineHealthTests(unittest.TestCase):
         ]
         body = health.report_body(checks, NOW, daily=True)
         self.assertEqual(body, "All 2/2 checks are healthy.\nDisk: 887 GB free (44%)")
+
+    @mock.patch("monitor_pipeline_health.shutil.disk_usage")
+    def test_storage_includes_radarsat_working_set_and_alarms(self, disk_usage):
+        disk_usage.return_value = shutil._ntuple_diskusage(
+            2_000_000_000_000,
+            1_300_000_000_000,
+            700_000_000_000,
+        )
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            radar_health = root / "radar-health.json"
+            radar_health.write_text(json.dumps({
+                "storage": {
+                    "totalBytes": 21_000_000_000,
+                    "compositeCacheBytes": 6_000_000_000,
+                    "videoSegmentBytes": 5_000_000_000,
+                    "sourceFrameBytes": 2_000_000_000,
+                }
+            }))
+            result = health.check_storage(root, radar_health)
+        self.assertEqual(result.level, "warning")
+        self.assertIn("Radar-Sat 21.0 GB", result.summary)
+        self.assertIn("cache 6.0", result.summary)
 
     def test_unhealthy_daily_report_includes_problem_details(self):
         checks = [

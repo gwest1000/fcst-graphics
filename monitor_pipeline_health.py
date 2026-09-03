@@ -37,6 +37,12 @@ RECOVERY_HOLD = dt.timedelta(minutes=55)
 WARNING_REPEAT = dt.timedelta(hours=24)
 CRITICAL_REPEAT = dt.timedelta(hours=6)
 MAX_REPORTED_PROBLEMS = 8
+RADARSAT_HEALTH_PATH = Path(
+    os.environ.get(
+        "RADARSAT_HEALTH_STATUS_PATH",
+        str(Path.home() / "projects/radar-sat/var/status/health.json"),
+    )
+)
 
 SEVERITY_ORDER = {"ok": 0, "warning": 1, "critical": 2}
 
@@ -397,7 +403,10 @@ def configured_volume(data_root: Path) -> Path:
     return data_root
 
 
-def check_storage(data_root: Path) -> CheckResult:
+def check_storage(
+    data_root: Path,
+    radar_health_path: Path = RADARSAT_HEALTH_PATH,
+) -> CheckResult:
     volume = configured_volume(data_root)
     if not volume.exists() or not data_root.exists():
         return CheckResult("storage.runtime", "Forecast data storage", "critical", f"unavailable: {volume}", immediate=True)
@@ -407,8 +416,44 @@ def check_storage(data_root: Path) -> CheckResult:
         return CheckResult("storage.runtime", "Forecast data storage", "critical", f"usage check failed: {exc}", immediate=True)
     free_fraction = usage.free / usage.total if usage.total else 0.0
     free_gb = usage.free / 1_000_000_000
-    level = "critical" if free_fraction < 0.05 or free_gb < 50 else "warning" if free_fraction < 0.10 or free_gb < 100 else "ok"
-    return CheckResult("storage.runtime", "Forecast data storage", level, f"{free_gb:.0f} GB free ({free_fraction:.0%})", immediate=True)
+    level = (
+        "critical"
+        if free_fraction < 0.05 or free_gb < 100
+        else "warning"
+        if free_fraction < 0.10 or free_gb < 200
+        else "ok"
+    )
+    summary = f"{free_gb:.0f} GB free ({free_fraction:.0%})"
+    try:
+        radar_health = read_state(radar_health_path)
+        storage = radar_health.get("storage", {})
+        if isinstance(storage, dict):
+            local_bytes = int(storage.get("totalBytes", 0) or 0)
+            cache_bytes = int(storage.get("compositeCacheBytes", 0) or 0)
+            segment_bytes = int(storage.get("videoSegmentBytes", 0) or 0)
+            source_bytes = int(storage.get("sourceFrameBytes", 0) or 0)
+            if local_bytes:
+                summary += (
+                    f"; Radar-Sat {local_bytes / 1_000_000_000:.1f} GB"
+                    f" (cache {cache_bytes / 1_000_000_000:.1f},"
+                    f" HLS {segment_bytes / 1_000_000_000:.1f},"
+                    f" source {source_bytes / 1_000_000_000:.1f})"
+                )
+                if local_bytes >= 30_000_000_000:
+                    level = "critical"
+                elif local_bytes >= 20_000_000_000 and level != "critical":
+                    level = "warning"
+    except (OSError, TypeError, ValueError):
+        # The Radar-Sat health service owns status-file availability. This
+        # check remains the storage alarm and does not duplicate that service.
+        pass
+    return CheckResult(
+        "storage.runtime",
+        "Forecast data storage",
+        level,
+        summary,
+        immediate=True,
+    )
 
 
 def launchctl_print(label: str) -> subprocess.CompletedProcess[str]:
@@ -637,7 +682,7 @@ def operational_impact(check: CheckResult) -> str:
 
 def recommended_action(check: CheckResult) -> str:
     if check.key == "storage.runtime":
-        return "Confirm the external forecast-data volume is mounted and has free space."
+        return "Confirm the external volume is mounted; if Radar-Sat is oversized, inspect its cache and HLS working set."
     if check.key == "group.public_manifests":
         return "Open the graphics page from another network; if it also fails, inspect R2 and the publishers."
     if check.key == "group.schedulers":
