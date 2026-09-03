@@ -7,6 +7,7 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 AGENT_DIR="${HOME}/Library/LaunchAgents"
 LOG_DIR="${REPO_ROOT}/logs"
 R2_PUBLISHER="${REPO_ROOT}/scripts/launchd/run_r2_publisher.sh"
+R2_RECONCILER="${REPO_ROOT}/scripts/launchd/run_r2_reconcile.sh"
 
 mkdir -p "${AGENT_DIR}" "${LOG_DIR}"
 
@@ -55,8 +56,46 @@ PLIST
   launchctl enable "gui/${UID}/${label}"
 }
 
-for model in continental west gefs_control ecmwf_control ecmwf_ensemble; do
+for model in continental gefs_control ecmwf_control ecmwf_ensemble; do
   install_r2_agent "${model}"
 done
+
+RECONCILE_LABEL="com.greg.fcst-r2-weekly-reconcile"
+RECONCILE_TARGET="${AGENT_DIR}/${RECONCILE_LABEL}.plist"
+cat > "${RECONCILE_TARGET}" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>${RECONCILE_LABEL}</string>
+  <key>WorkingDirectory</key>
+  <string>${REPO_ROOT}</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/zsh</string>
+    <string>${R2_RECONCILER}</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key><integer>1</integer>
+    <key>Hour</key><integer>4</integer>
+    <key>Minute</key><integer>20</integer>
+  </dict>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>${LOG_DIR}/r2_weekly_reconcile.log</string>
+  <key>StandardErrorPath</key>
+  <string>${LOG_DIR}/r2_weekly_reconcile.err.log</string>
+</dict>
+</plist>
+PLIST
+plutil -lint "${RECONCILE_TARGET}" >/dev/null
+launchctl bootout "gui/${UID}/${RECONCILE_LABEL}" 2>/dev/null || true
+launchctl bootstrap "gui/${UID}" "${RECONCILE_TARGET}"
+launchctl enable "gui/${UID}/${RECONCILE_LABEL}"
 
 launchctl print "gui/${UID}" | grep 'com.greg.fcst-r2-' || true

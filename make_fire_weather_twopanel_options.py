@@ -22,11 +22,12 @@ import make_hrdps_fire_weather_twopanel as production
 import make_hrdps_west_convective as hrdps
 import make_hrdps_west_lightning as lightning
 import plot_style
+import project_paths
 
 
 DEFAULT_STAMP = "20260714T18Z"
 DEFAULT_FHOUR = 30
-DEFAULT_OUTPUT_DIR = Path("plots/test_fire_weather_twopanel/options_20260714T18Z_f030")
+DEFAULT_OUTPUT_DIR = project_paths.plot_path("test_fire_weather_twopanel", "options_20260714T18Z_f030")
 DANGER_LEVELS = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
 DANGER_COLORS = ("#78add3", "#75bd74", "#f2df55", "#ed9418", "#c61d23")
 DANGER_TICKS = (1, 2, 3, 4, 5)
@@ -113,7 +114,6 @@ def plot_lpi_fill(
 
 
 def plot_danger_fill(ax: plt.Axes, lon: np.ndarray, lat: np.ndarray, danger: np.ndarray):
-    danger_s = lightning.smooth_nan(danger, sigma=lightning.sigma_for_km(5.0))
     cmap = mcolors.ListedColormap(DANGER_COLORS, name="twopanel_danger")
     norm = mcolors.BoundaryNorm(DANGER_LEVELS, cmap.N)
     with warnings.catch_warnings():
@@ -121,7 +121,7 @@ def plot_danger_fill(ax: plt.Axes, lon: np.ndarray, lat: np.ndarray, danger: np.
         return ax.contourf(
             lon,
             lat,
-            danger_s,
+            danger,
             levels=DANGER_LEVELS,
             cmap=cmap,
             norm=norm,
@@ -559,6 +559,7 @@ def load_fields(run: hrdps.RunInfo, fhour: int, data_dir: Path):
     )
     if peak_grid is None:
         raise RuntimeError(f"No complete peak fire-danger grid is available for {fire_date:%Y-%m-%d}.")
+    peak_grid = lightning.prepare_peak_danger_for_plot(peak_grid, base_lat, base_lon)
     return base_lat, base_lon, fields, peak_grid.danger
 
 
@@ -566,7 +567,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--stamp", default=DEFAULT_STAMP)
     parser.add_argument("--fhour", type=int, default=DEFAULT_FHOUR)
-    parser.add_argument("--data-dir", type=Path, default=Path("data/hrdps_continental"))
+    parser.add_argument("--data-dir", type=Path, default=project_paths.data_path("hrdps_continental"))
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 

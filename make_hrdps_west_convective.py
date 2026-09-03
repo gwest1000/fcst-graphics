@@ -45,9 +45,10 @@ from shapely.ops import transform as transform_geometry
 
 import plot_style
 import gust_diagnostics
+import project_paths
 
 WEST_EXTENT = (-138.7, -109.0, 46.0, 58.45)
-WATERSHED_CACHE = Path("data/bc_watersheds/bch/AllWatershedsUTM.shp")
+WATERSHED_CACHE = project_paths.static_data_path("bc_watersheds", "bch", "AllWatershedsUTM.shp")
 WATERSHED_EDGE_COLOR = "#173f73"
 WATERSHED_LINEWIDTH = 0.80
 WATERSHED_HALO_LINEWIDTH = 1.18
@@ -80,8 +81,8 @@ MODEL_CONFIGS = {
         cycles=("00", "12"),
         output_prefix="hrdps_west",
         resolution_km=1.0,
-        default_data_dir="data/hrdps_west",
-        default_output_dir="plots/hrdps_west",
+        default_data_dir=str(project_paths.data_path("hrdps_west")),
+        default_output_dir=str(project_paths.plot_path("hrdps_west")),
     ),
     "continental": ModelConfig(
         key="continental",
@@ -93,8 +94,8 @@ MODEL_CONFIGS = {
         cycles=("00", "06", "12", "18"),
         output_prefix="hrdps_continental",
         resolution_km=2.5,
-        default_data_dir="data/hrdps_continental",
-        default_output_dir="plots/hrdps_continental",
+        default_data_dir=str(project_paths.data_path("hrdps_continental")),
+        default_output_dir=str(project_paths.plot_path("hrdps_continental")),
     ),
 }
 

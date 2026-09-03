@@ -88,8 +88,6 @@ PLIST
   launchctl enable "gui/${UID}/${label}"
 }
 
-selected "com.greg.hrdps-west-convective-00" && install_agent "com.greg.hrdps-west-convective-00" "west" "00" "17" "30" "690" "900" "hrdps_west_00"
-selected "com.greg.hrdps-west-convective-12" && install_agent "com.greg.hrdps-west-convective-12" "west" "12" "5" "30" "690" "900" "hrdps_west_12"
 selected "com.greg.hrdps-continental-00" && install_agent "com.greg.hrdps-continental-00" "continental" "00" "17" "30" "360" "540" "hrdps_continental_00"
 selected "com.greg.hrdps-continental-06" && install_agent "com.greg.hrdps-continental-06" "continental" "06" "23" "30" "360" "540" "hrdps_continental_06"
 selected "com.greg.hrdps-continental-12" && install_agent "com.greg.hrdps-continental-12" "continental" "12" "5" "30" "360" "540" "hrdps_continental_12"

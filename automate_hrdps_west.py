@@ -14,6 +14,7 @@ import signal
 import shutil
 import subprocess
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -24,6 +25,7 @@ import make_hrdps_west_fourpanel as fourpanel
 import make_hrdps_west_lightning as lightning
 import make_hrdps_temperature as temperature
 import lightning_ml_archive as ml_archive
+import project_paths
 from publish_hrdps_west import (
     DEFAULT_PAGES_REPO,
     PRODUCTS_BY_MODEL,
@@ -32,19 +34,28 @@ from publish_hrdps_west import (
     image_name_for_hour,
     publish,
 )
+from r2_publish import FORECAST_FULL_RUN_KEEP_HOURS, FORECAST_RETAINED_CYCLES
 
 FOURPANEL_WATERSHED_CACHE = convective.WATERSHED_CACHE
 PUBLISH_LOCK = Path("logs/hrdps_publish.lock")
 JOB_STATE_ROOT = Path("logs/state")
 FIRE_WEATHER_REGION_KEYS_BY_MODEL = {
-    "west": ("sw", "se", "ne"),
     "continental": ("bc",),
 }
 
 
+@dataclass(frozen=True)
+class IncrementalResult:
+    run: convective.RunInfo
+    complete: bool
+    ready_hours: tuple[int, ...]
+    rendered_hours: tuple[int, ...]
+    optional_errors: tuple[str, ...]
+
+
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=sorted(convective.MODEL_CONFIGS), default="west")
+    parser.add_argument("--model", choices=("continental",), default="continental")
     parser.add_argument("--cycle", choices=["latest", "00", "06", "12", "18"], required=True)
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None, help="Convective output directory.")
@@ -286,13 +297,14 @@ def missing_baseline_lpi_hours(
     archive_root: Path | None,
     run: convective.RunInfo,
     plot_hours: Iterable[int],
+    model_key: str = "continental",
 ) -> set[int]:
     if archive_root is None:
         return set()
     return {
         int(fhour)
         for fhour in plot_hours
-        if not ml_archive.baseline_hour_archive_path(archive_root, run.stamp, int(fhour)).exists()
+        if not ml_archive.baseline_hour_archive_path(archive_root, run.stamp, int(fhour), model_key).exists()
     }
 
 
@@ -427,7 +439,7 @@ def archive_lpi_baselines(
     hours: Iterable[int],
 ) -> bool:
     hours = tuple(sorted(set(int(hour) for hour in hours)))
-    if not hours or not ml_archive.should_archive_hourly_lpi_run(args.model, run.cycle):
+    if not hours or not ml_archive.should_archive_lpi_baseline_run(args.model, run.cycle):
         return True
     preflight_error = getattr(args, "ml_archive_preflight_error", None)
     if preflight_error:
@@ -435,7 +447,13 @@ def archive_lpi_baselines(
         return False
     try:
         ml_archive.verify_archive_writable(args.ml_archive_root)
-        ml_archive.archive_lpi_baseline_hours(args.ml_archive_root, run, lightning_output_dir, hours)
+        ml_archive.archive_lpi_baseline_hours(
+            args.ml_archive_root,
+            run,
+            lightning_output_dir,
+            hours,
+            model_key=args.model,
+        )
         ml_archive.write_archive_status(args.ml_archive_root)
         return True
     except Exception as exc:
@@ -452,10 +470,20 @@ def hourly_archive_root_for_run(args: argparse.Namespace, run: convective.RunInf
     return args.ml_archive_root
 
 
+def baseline_archive_root_for_run(args: argparse.Namespace, run: convective.RunInfo) -> Path | None:
+    if getattr(args, "ml_archive_preflight_error", None):
+        return None
+    if not ml_archive.should_archive_lpi_baseline_run(args.model, run.cycle):
+        return None
+    return args.ml_archive_root
+
+
 def cleanup_local_plots(output_dir: Path, keep_days: int) -> None:
     if not output_dir.exists():
         return
-    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=keep_days)
+    now = dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(days=keep_days)
+    full_run_cutoff = now - dt.timedelta(hours=FORECAST_FULL_RUN_KEEP_HOURS)
     for child in output_dir.iterdir():
         if not child.is_dir():
             continue
@@ -463,7 +491,9 @@ def cleanup_local_plots(output_dir: Path, keep_days: int) -> None:
             init_time = convective.parse_stamp(child.name)
         except ValueError:
             continue
-        if init_time < cutoff:
+        if init_time < cutoff or (
+            init_time < full_run_cutoff and init_time.hour not in FORECAST_RETAINED_CYCLES
+        ):
             convective.log(f"Removing local plot archive older than retention: {child}")
             shutil.rmtree(child)
 
@@ -527,12 +557,14 @@ def status_path(model: str, cycle: str) -> Path:
 
 
 def write_status(model: str, cycle: str, status: str, **metadata: object) -> None:
+    now = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
     payload = {
         "model": model,
         "cycle": cycle,
         "status": status,
         "pid": os.getpid(),
-        "updated_at_utc": dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z"),
+        "updated_at_utc": now,
+        "heartbeat_at_utc": now,
         **metadata,
     }
     path = status_path(model, cycle)
@@ -550,7 +582,6 @@ def job_lock(model: str, cycle: str):
             fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             convective.log(f"Another HRDPS job is already running for {model} {cycle}; skipping this launch.")
-            write_status(model, cycle, "skipped_existing_lock")
             yield False
             return
         handle.write(f"pid={os.getpid()} started_at_utc={dt.datetime.now(dt.timezone.utc).isoformat()}\n")
@@ -695,6 +726,21 @@ def render_danger_worker(
     )
 
 
+def render_optional_danger_worker(
+    model: str,
+    run: convective.RunInfo,
+    data_dir: Path,
+    output_dir: Path,
+    hours: tuple[int, ...],
+) -> tuple[int, str | None]:
+    """Render experimental danger frames without taking down core HRDPS products."""
+
+    try:
+        return render_danger_worker(model, run, data_dir, output_dir, hours), None
+    except Exception as exc:
+        return 0, f"{type(exc).__name__}: {exc}"
+
+
 def render_products(
     args: argparse.Namespace,
     run: convective.RunInfo,
@@ -715,23 +761,31 @@ def render_products(
     lightning_hours: Iterable[int],
     temperature_hours: Iterable[int],
     danger_hours: Iterable[int],
-) -> None:
+) -> dict[str, str]:
     fourpanel_hours = tuple(sorted(set(int(hour) for hour in fourpanel_hours)))
     lightning_hours = tuple(sorted(set(int(hour) for hour in lightning_hours)))
     temperature_hours = tuple(sorted(set(int(hour) for hour in temperature_hours)))
     danger_hours = tuple(sorted(set(int(hour) for hour in danger_hours)))
     full_danger_render = set(convective.FORECAST_HOURS).issubset(danger_hours)
     hourly_archive_root = hourly_archive_root_for_run(args, run)
+    optional_errors: dict[str, str] = {}
     if full_danger_render and lightning_hours:
         convective.log("Rendering the complete hourly danger sequence before fire-weather peak overlays.")
-        render_danger_worker(args.model, run, data_dir, danger_output_dir, danger_hours)
+        count, error = render_optional_danger_worker(
+            args.model, run, data_dir, danger_output_dir, danger_hours
+        )
+        if error is not None:
+            optional_errors["FWI2025 danger"] = error
+            convective.log(f"Optional FWI2025 danger render failed; core products will continue: {error}")
+        else:
+            convective.log(f"Finished FWI2025 danger render worker with {count} frames.")
         danger_hours = ()
     job_count = sum(
         bool(hours)
         for hours in (fourpanel_hours, lightning_hours, temperature_hours, danger_hours)
     )
     if job_count == 0:
-        return
+        return optional_errors
     if job_count == 1:
         if fourpanel_hours:
             render_fourpanel_worker(
@@ -760,8 +814,15 @@ def render_products(
                 temperature_hours,
             )
         else:
-            render_danger_worker(args.model, run, data_dir, danger_output_dir, danger_hours)
-        return
+            count, error = render_optional_danger_worker(
+                args.model, run, data_dir, danger_output_dir, danger_hours
+            )
+            if error is not None:
+                optional_errors["FWI2025 danger"] = error
+                convective.log(f"Optional FWI2025 danger render failed; core products will continue: {error}")
+            else:
+                convective.log(f"Finished FWI2025 danger render worker with {count} frames.")
+        return optional_errors
     convective.log(
         "Rendering products with up to two worker processes: "
         f"four-panel={len(fourpanel_hours)}, "
@@ -808,7 +869,7 @@ def render_products(
             )
         if danger_hours:
             futures["FWI2025 danger"] = executor.submit(
-                render_danger_worker,
+                render_optional_danger_worker,
                 args.model,
                 run,
                 data_dir,
@@ -817,16 +878,34 @@ def render_products(
             )
         for future in concurrent.futures.as_completed(futures.values()):
             name = next(key for key, value in futures.items() if value is future)
-            count = future.result()
+            result = future.result()
+            if name == "FWI2025 danger":
+                count, error = result
+                if error is not None:
+                    optional_errors[name] = error
+                    convective.log(
+                        f"Optional {name} render failed; core products will continue: {error}"
+                    )
+                    continue
+            else:
+                count = result
             convective.log(f"Finished {name} render worker with {count} frames.")
+    return optional_errors
 
 
-def wait_for_current_run(cycle: str, wait_minutes: int, poll_minutes: int) -> convective.RunInfo:
+def wait_for_current_run(
+    cycle: str,
+    wait_minutes: int,
+    poll_minutes: int,
+    heartbeat=None,
+) -> convective.RunInfo:
     deadline = time.monotonic() + wait_minutes * 60
     while True:
         run = current_cycle_run(cycle)
         if run is not None:
             return run
+        if heartbeat is not None:
+            heartbeat()
         if time.monotonic() >= deadline:
             raise RuntimeError(
                 f"Timed out waiting for current {convective.model_config().label} {cycle}Z listing "
@@ -840,6 +919,7 @@ def render_incremental_run(
     args: argparse.Namespace,
     config: convective.ModelConfig,
     data_dir: Path,
+    output_dir: Path,
     fourpanel_output_dir: Path,
     lightning_output_dir: Path,
     temperature_output_dir: Path,
@@ -854,11 +934,29 @@ def render_incremental_run(
     temperature_contour_stride: int,
     fourpanel_key: str | None,
     danger_key: str | None,
-) -> convective.RunInfo:
+) -> IncrementalResult:
     if args.cycle == "latest":
         run = latest_complete_run()
     else:
-        run = wait_for_current_run(args.cycle, args.wait_minutes, args.poll_minutes)
+        write_status(
+            args.model,
+            args.cycle,
+            "waiting_upstream",
+            model_label=config.label,
+            expected_stamp=expected_stamp_for_cycle(args.cycle),
+        )
+        run = wait_for_current_run(
+            args.cycle,
+            args.wait_minutes,
+            args.poll_minutes,
+            heartbeat=lambda: write_status(
+                args.model,
+                args.cycle,
+                "waiting_upstream",
+                model_label=config.label,
+                expected_stamp=expected_stamp_for_cycle(args.cycle),
+            ),
+        )
 
     convective.log(f"Using {config.label} run {run.stamp}.")
     hourly_archive_root = hourly_archive_root_for_run(args, run)
@@ -867,18 +965,12 @@ def render_incremental_run(
     lightning_keys = lightning_product_keys(args.model)
     temperature_keys = temperature_product_keys(args.model)
     # Experimental danger frames can begin after F000 when CWFIS bootstrap occurs, so they never gate core products.
-    if args.legacy_pages_publish:
-        last_published_hours: set[int] = full_product_family_hours_published(
-            args.pages_repo, run.stamp, lightning_keys
-        )
-        last_published_hours &= full_product_family_hours_published(
-            args.pages_repo, run.stamp, temperature_keys
-        )
-        if fourpanel_key is not None:
-            last_published_hours &= full_product_hours_published(args.pages_repo, run.stamp, fourpanel_key)
-    else:
-        last_published_hours = set()
+    last_complete_hours: set[int] = set()
+    last_publishable_hours: set[int] = set()
     last_publish_monotonic = 0.0
+    optional_errors: set[str] = set()
+    progress_signature: tuple[int, int] | None = None
+    last_progress_at_utc = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
     while True:
         ready = set(ready_hours(run))
@@ -891,9 +983,16 @@ def render_incremental_run(
         )
         danger_done = existing_plot_hours(danger_output_dir, run.stamp, danger_key) if danger_key is not None else set(ready)
         core_done = four_done & lightning_done & temperature_done
+        last_complete_hours = set(core_done)
+        current_progress = (len(ready), len(core_done))
+        if current_progress != progress_signature:
+            progress_signature = current_progress
+            last_progress_at_utc = dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
         needs_fourpanel = sorted(ready - four_done)
         missing_hourly_archive = missing_hourly_lpi_plot_hours(hourly_archive_root, run, ready)
-        missing_baseline_archive = missing_baseline_lpi_hours(hourly_archive_root, run, ready)
+        missing_baseline_archive = missing_baseline_lpi_hours(
+            baseline_archive_root_for_run(args, run), run, ready, args.model
+        )
         needs_lightning = sorted((ready - lightning_done) | missing_hourly_archive)
         needs_temperature = sorted(ready - temperature_done)
         danger_is_bootstrap_shortened = bool(danger_done) and all_hours.issubset(core_done)
@@ -911,6 +1010,17 @@ def render_incremental_run(
                 f"temperature={len(needs_temperature)}, "
                 f"baseline archive={len(missing_baseline_archive)}, FWI2025 danger={len(needs_danger)}."
             )
+        write_status(
+            args.model,
+            args.cycle,
+            "rendering" if ready - core_done else "waiting_upstream",
+            model_label=config.label,
+            stamp=run.stamp,
+            expected_hours=len(all_hours),
+            ready_hours=sorted(ready),
+            rendered_hours=sorted(core_done),
+            last_progress_at_utc=last_progress_at_utc,
+        )
 
         if needs_fourpanel or needs_lightning or needs_temperature or needs_danger or args.force:
             plot_hours = sorted(
@@ -923,7 +1033,7 @@ def render_incremental_run(
             )
             download_hours(run, data_dir, plot_hours, args.workers)
             archive_downloaded_hours(args, run, data_dir, plot_hours)
-            render_products(
+            render_errors = render_products(
                 args,
                 run,
                 data_dir,
@@ -944,6 +1054,7 @@ def render_incremental_run(
                 sorted(ready if args.force else needs_temperature),
                 sorted(ready if args.force and danger_key is not None else needs_danger),
             )
+            optional_errors.update(f"{key}: {value}" for key, value in render_errors.items())
 
         baseline_hours = sorted(ready if args.force else set(needs_lightning) | missing_baseline_archive)
         if baseline_hours:
@@ -971,26 +1082,34 @@ def render_incremental_run(
             )
             if peak_overlay_stale:
                 convective.log("Finalizing peak-daily fire danger and refreshing all fire-weather overlays.")
-                render_danger_worker(
+                count, danger_error = render_optional_danger_worker(
                     args.model,
                     run,
                     data_dir,
                     danger_output_dir,
                     tuple(convective.FORECAST_HOURS),
                 )
-                render_lightning_worker(
-                    args.model,
-                    run,
-                    data_dir,
-                    lightning_output_dir,
-                    lightning_shade_stride,
-                    lightning_contour_stride,
-                    lightning_dcape_stride,
-                    tuple(convective.FORECAST_HOURS),
-                    hourly_archive_root,
-                    render_wind=False,
-                )
-                archive_lpi_baselines(args, run, lightning_output_dir, convective.FORECAST_HOURS)
+                if danger_error is not None:
+                    optional_errors.add(f"fwi2025_danger: {danger_error}")
+                    convective.log(
+                        "Optional peak-daily FWI2025 finalization failed; "
+                        f"retaining the existing fire-weather overlays: {danger_error}"
+                    )
+                else:
+                    convective.log(f"Finished peak-daily FWI2025 finalization with {count} frames.")
+                    render_lightning_worker(
+                        args.model,
+                        run,
+                        data_dir,
+                        lightning_output_dir,
+                        lightning_shade_stride,
+                        lightning_contour_stride,
+                        lightning_dcape_stride,
+                        tuple(convective.FORECAST_HOURS),
+                        hourly_archive_root,
+                        render_wind=False,
+                    )
+                    archive_lpi_baselines(args, run, lightning_output_dir, convective.FORECAST_HOURS)
 
         # Publish core products independently of the optional, potentially shorter danger sequence.
         publishable_hours = existing_product_family_hours(lightning_output_dir, run.stamp, lightning_keys)
@@ -1001,7 +1120,8 @@ def render_incremental_run(
         )
         if fourpanel_key is not None:
             publishable_hours &= existing_plot_hours(fourpanel_output_dir, run.stamp, fourpanel_key)
-        if publishable_hours and (publishable_hours != last_published_hours or args.force):
+        last_complete_hours = set(publishable_hours)
+        if publishable_hours and (publishable_hours != last_publishable_hours or args.force):
             full_run_ready = all_hours.issubset(publishable_hours)
             cooldown_seconds = max(0, args.publish_cooldown_minutes) * 60
             elapsed_since_publish = time.monotonic() - last_publish_monotonic
@@ -1029,14 +1149,17 @@ def render_incremental_run(
                             f"rendering will continue and the independent publisher can retry: {exc}"
                         )
                 last_publish_monotonic = time.monotonic()
-                last_published_hours = set(publishable_hours)
+                last_publishable_hours = set(publishable_hours)
                 write_status(
                     args.model,
                     args.cycle,
-                    "running",
+                    "rendering" if not all_hours.issubset(last_complete_hours) else "complete",
                     model_label=config.label,
                     stamp=run.stamp,
-                    published_hours=sorted(last_published_hours),
+                    expected_hours=len(all_hours),
+                    ready_hours=sorted(ready),
+                    rendered_hours=sorted(last_complete_hours),
+                    optional_errors=sorted(optional_errors),
                 )
             else:
                 remaining = max(0.0, cooldown_seconds - elapsed_since_publish) / 60.0
@@ -1045,21 +1168,34 @@ def render_incremental_run(
                     f"{len(publishable_hours)} hours are render-complete, cooldown has {remaining:.1f} minutes left."
                 )
 
-        if all_hours.issubset(last_published_hours):
-            convective.log(f"All forecast hours are published for {run.stamp}.")
+        if all_hours.issubset(last_complete_hours):
+            convective.log(f"All forecast hours are rendered for {run.stamp}.")
             cleanup_local_plots(fourpanel_output_dir, args.keep_days)
             cleanup_local_plots(lightning_output_dir, args.keep_days)
             cleanup_local_plots(temperature_output_dir, args.keep_days)
             cleanup_local_plots(danger_output_dir, args.keep_days)
             cleanup_model_data(data_dir, run.stamp, args.ml_archive_root)
-            return run
+            return IncrementalResult(
+                run=run,
+                complete=True,
+                ready_hours=tuple(sorted(ready)),
+                rendered_hours=tuple(sorted(last_complete_hours)),
+                optional_errors=tuple(sorted(optional_errors)),
+            )
 
         if time.monotonic() >= deadline:
-            if last_published_hours:
+            if last_complete_hours:
                 convective.log(
-                    f"Timed out before full run, but published {len(last_published_hours)} hours for {run.stamp}."
+                    f"Timed out before full run; {len(last_complete_hours)}/{len(all_hours)} core hours "
+                    f"were rendered for {run.stamp}."
                 )
-                return run
+                return IncrementalResult(
+                    run=run,
+                    complete=False,
+                    ready_hours=tuple(sorted(ready)),
+                    rendered_hours=tuple(sorted(last_complete_hours)),
+                    optional_errors=tuple(sorted(optional_errors)),
+                )
             raise RuntimeError(f"Timed out before any publishable hours were ready for {run.stamp}.")
 
         convective.log(f"Waiting {args.poll_minutes} minutes for more {run.stamp} forecast hours.")
@@ -1076,7 +1212,7 @@ def main(argv: Iterable[str]) -> int:
     fourpanel_output_dir = args.fourpanel_output_dir or Path(f"{config.default_output_dir}_fourpanel")
     lightning_output_dir = args.lightning_output_dir or Path(f"{config.default_output_dir}_lightning")
     temperature_output_dir = args.temperature_output_dir or Path(f"{config.default_output_dir}_temperature")
-    danger_output_dir = args.danger_output_dir or Path("plots/experimental_fwi2025_danger")
+    danger_output_dir = args.danger_output_dir or project_paths.plot_path("experimental_fwi2025_danger")
     shade_stride = args.fourpanel_shade_stride or convective.grid_stride(5.0)
     contour_stride = args.fourpanel_contour_stride or convective.grid_stride(12.0)
     barb_stride = args.fourpanel_barb_stride or convective.grid_stride(27.0)
@@ -1098,7 +1234,7 @@ def main(argv: Iterable[str]) -> int:
         raise RuntimeError(f"Unsupported {config.label} cycle: {args.cycle}")
 
     args.ml_archive_preflight_error = None
-    if args.model == "continental":
+    if args.model in convective.MODEL_CONFIGS:
         try:
             ml_archive.verify_archive_writable(args.ml_archive_root)
         except Exception as exc:
@@ -1119,10 +1255,11 @@ def main(argv: Iterable[str]) -> int:
         try:
             with max_runtime(args.max_runtime_minutes):
                 if not args.complete_only:
-                    run = render_incremental_run(
+                    incremental = render_incremental_run(
                         args,
                         config,
                         data_dir,
+                        output_dir,
                         fourpanel_output_dir,
                         lightning_output_dir,
                         temperature_output_dir,
@@ -1138,25 +1275,17 @@ def main(argv: Iterable[str]) -> int:
                         fourpanel_key,
                         danger_key,
                     )
+                    run = incremental.run
                     write_status(
                         args.model,
                         args.cycle,
-                        "success",
+                        "complete" if incremental.complete and not incremental.optional_errors else "degraded",
                         model_label=config.label,
                         stamp=run.stamp,
-                        published_hours=sorted(
-                            (
-                                full_product_hours_published(args.pages_repo, run.stamp, fourpanel_key)
-                                if fourpanel_key is not None
-                                else set(convective.FORECAST_HOURS)
-                            )
-                            & full_product_family_hours_published(args.pages_repo, run.stamp, lightning_keys)
-                            & full_product_family_hours_published(
-                                args.pages_repo,
-                                run.stamp,
-                                temperature_keys,
-                            )
-                        ),
+                        expected_hours=len(convective.FORECAST_HOURS),
+                        ready_hours=list(incremental.ready_hours),
+                        rendered_hours=list(incremental.rendered_hours),
+                        optional_errors=list(incremental.optional_errors),
                         lightning_ml_archive_error=args.ml_archive_preflight_error,
                     )
                     return 0
@@ -1205,7 +1334,9 @@ def main(argv: Iterable[str]) -> int:
                 danger_complete = danger_key is None or plot_set_complete(danger_output_dir, run.stamp, danger_key)
                 all_plot_hours = set(convective.FORECAST_HOURS)
                 missing_hourly_archive = missing_hourly_lpi_plot_hours(hourly_archive_root, run, all_plot_hours)
-                missing_baseline_archive = missing_baseline_lpi_hours(hourly_archive_root, run, all_plot_hours)
+                missing_baseline_archive = missing_baseline_lpi_hours(
+                    baseline_archive_root_for_run(args, run), run, all_plot_hours, args.model
+                )
                 needs_broad_archive = ml_archive.should_archive_model_run(args.model, run.cycle) and not ml_archive.run_archive_complete(
                     args.ml_archive_root,
                     run.stamp,

@@ -12,11 +12,12 @@ import make_fire_weather_regional_options as regional_options
 import make_hrdps_fire_weather_twopanel as production
 import make_hrdps_west_convective as hrdps
 import make_hrdps_west_lightning as lightning
+import project_paths
 
 
 DEFAULT_STAMP = "20260715T12Z"
 DEFAULT_FHOUR = 12
-DEFAULT_OUTPUT_DIR = Path("plots/test_fire_weather_regional/twopanel_20260715T12Z_f012")
+DEFAULT_OUTPUT_DIR = project_paths.plot_path("test_fire_weather_regional", "twopanel_20260715T12Z_f012")
 REGIONAL_EXTENTS = production.REGIONAL_EXTENTS
 
 
@@ -57,7 +58,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stamp", default=DEFAULT_STAMP)
     parser.add_argument("--fhour", type=int, default=DEFAULT_FHOUR)
     parser.add_argument("--regions", default="sw,se,ne")
-    parser.add_argument("--data-dir", type=Path, default=Path("data/hrdps_west"))
+    parser.add_argument("--data-dir", type=Path, default=project_paths.data_path("hrdps_west"))
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 

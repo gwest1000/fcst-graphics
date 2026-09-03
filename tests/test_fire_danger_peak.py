@@ -85,6 +85,39 @@ class PeakBurnAccumulatorTest(unittest.TestCase):
                 )
             )
 
+    def test_cached_guidance_eligibility_is_decided_at_run_initialization(self) -> None:
+        day = self.complete_day()
+        run_init = dt.datetime(2026, 7, 14, 12, tzinfo=dt.timezone.utc)
+        anchor = dt.datetime(2026, 7, 13, 20, tzinfo=dt.timezone.utc)
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            peak.save_peak_danger_grid(
+                root,
+                "continental",
+                "20260714T12Z",
+                run_init,
+                day,
+                np.array([[4.0]], dtype=np.float32),
+                anchor_time_utc=anchor,
+            )
+            loaded = peak.load_peak_danger_grid(
+                root,
+                "continental",
+                day.fire_date,
+                run_init,
+                (1, 1),
+            )
+
+        self.assertIsNotNone(loaded)
+        assert loaded is not None
+        self.assertEqual(loaded.anchor_time_utc, anchor)
+        self.assertTrue(
+            peak.guidance_anchor_is_eligible_for_run(loaded, anchor + dt.timedelta(hours=48))
+        )
+        self.assertFalse(
+            peak.guidance_anchor_is_eligible_for_run(loaded, anchor + dt.timedelta(hours=49))
+        )
+
     def test_terminal_partial_day_can_supply_best_available_peak(self) -> None:
         accumulator = peak.PeakBurnAccumulator(LOCAL_TZ)
         start = dt.datetime(2026, 7, 18, 12, tzinfo=dt.timezone.utc)

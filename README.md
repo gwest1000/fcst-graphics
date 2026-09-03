@@ -3,14 +3,13 @@
 Operational forecast-map generation and publication for:
 
 - HRDPS 2.5 km
-- HRDPS-West 1 km
 - GEFS control
 - ECMWF IFS control
 - ECMWF ENS 500 hPa mean and spread
 
 The HRDPS surface products include three-hourly 2 m temperature for the
-BC-wide HRDPS 2.5 km domain and the Southern BC and Northern BC HRDPS-West
-1 km regional domains.
+BC-wide HRDPS 2.5 km domain. HRDPS-West 1 km products were retired in
+September 2026 ahead of the upstream model's announced decommissioning.
 
 The model jobs are managed independently. They share plotting code, but each has
 its own run locks, status, R2 upload state, and publication worker. GitHub Pages
@@ -60,7 +59,7 @@ Synchronize retained frames for one model:
 .venv/bin/python automate_r2_publish.py --model continental --once --sync-retained
 ```
 
-Supported model publication groups are `continental`, `west`, `gefs_control`,
+Supported model publication groups are `continental`, `gefs_control`,
 `ecmwf_control`, and `ecmwf_ensemble`. Verification products are included in
 their associated HRDPS manifests.
 
@@ -98,6 +97,17 @@ The publisher token is intentionally limited to bucket object read/write. Bucket
 CORS and lifecycle configuration therefore requires a separate administrative
 credential if `configure_r2_bucket.py` must be rerun.
 
+To apply the forecast and radar bucket lifecycle backstops with a temporary R2
+Admin Read & Write credential, run:
+
+```bash
+scripts/configure_r2_lifecycle_with_temporary_admin.zsh
+```
+
+The helper prompts locally for the Access Key ID and hidden Secret Access Key,
+applies both bucket configurations, and does not store the administrative
+credential. Revoke the temporary token after the command succeeds.
+
 ## Pipeline health monitoring
 
 `monitor_pipeline_health.py` checks the complete forecast pipeline each hour:
@@ -105,9 +115,17 @@ required launch agents, the external data volume, public R2 model manifests,
 BCWS fire activity, the ECCC lightning archive, and daily CWFIS FFMC/DMC/DC
 anchors. Missing launch agents are reloaded automatically. Disk loss and failed
 scheduler repair alert immediately. A scheduler exit code, successful automatic
-repair, or remote failure must still be present at the next hourly check before
-it sends a push alert. Each run is retained in a rotating JSONL history so an
-alert can be investigated after recovery.
+repair, or remote failure must persist for 55 minutes before it sends a push
+alert. This is elapsed-time based, so the daily check cannot accidentally count
+as a second hourly failure. Critical incidents repeat every 6 hours, warnings
+repeat every 24 hours, and recovery must remain stable for 55 minutes. Related
+public-manifest or scheduler failures are grouped into one actionable incident,
+with a bounded message size and a link to the graphics page. A shared lock
+prevents the hourly and daily processes from racing. Each run is retained in a
+rotating JSONL history so an alert can be investigated after recovery.
+Only the launch-agent wrapper passes `--operational`; direct/manual invocations
+are isolated from durable incident state, cannot repair services, and cannot
+send Telegram alerts.
 
 Telegram alerts reuse `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from the
 existing Monitor Search environment, so credentials are not copied into this

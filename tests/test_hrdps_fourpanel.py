@@ -113,6 +113,14 @@ class HrdpsFourPanelTest(unittest.TestCase):
         self.assertAlmostEqual(colorbar[1], plot_style.FOURPANEL_FOOTER_BAND_HEIGHT)
         self.assertAlmostEqual(colorbar[3], plot_height)
 
+    def test_precip_colorbar_is_slightly_inset_from_text_bands(self) -> None:
+        colorbar = plot_style.FOURPANEL_PRECIP_COLORBAR_AX
+        plot_top = 1.0 - plot_style.FOURPANEL_HEADER_BAND_HEIGHT
+
+        self.assertAlmostEqual(colorbar[0] + colorbar[2], 1.0)
+        self.assertGreater(colorbar[1], plot_style.FOURPANEL_FOOTER_BAND_HEIGHT)
+        self.assertLess(colorbar[1] + colorbar[3], plot_top)
+
     def test_terrain_palette_darkens_with_elevation(self) -> None:
         luminance = []
         for color in fourpanel.TERRAIN_COLORS:

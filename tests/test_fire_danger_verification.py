@@ -15,6 +15,28 @@ import sync_fire_danger_bcws_inputs as mirror
 
 
 class FireDangerVerificationTest(unittest.TestCase):
+    def test_rendered_verification_retention_does_not_touch_data_archive(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            output = root / "plots"
+            old = output / "20260701T12Z"
+            recent = output / "20260719T12Z"
+            archive = root / "archive/forecasts/continental/20260701T12Z"
+            for path in (old, recent, archive):
+                path.mkdir(parents=True)
+                (path / "keep.csv").write_text("data\n")
+
+            removed = automation.prune_local_plots(
+                output,
+                keep_days=14,
+                now=dt.datetime(2026, 7, 20, 12, tzinfo=dt.timezone.utc),
+            )
+
+            self.assertEqual(removed, [old])
+            self.assertFalse(old.exists())
+            self.assertTrue(recent.exists())
+            self.assertTrue((archive / "keep.csv").exists())
+
     def test_recent_bcws_inputs_are_mirrored_for_launch_agents(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

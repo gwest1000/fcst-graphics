@@ -107,6 +107,37 @@ class FireActivityTests(unittest.TestCase):
         self.assertTrue(result.cached)
         self.assertEqual(len(result.observations), 1)
 
+    def test_recent_active_cache_precedes_hotspots_when_live_feed_fails(self):
+        now = dt.datetime(2026, 7, 22, 15, tzinfo=dt.timezone.utc)
+        cached = fire_activity.FireActivity(
+            source="bcws_active_fires",
+            retrieved_at=now - dt.timedelta(hours=2),
+            observations=(fire_activity.FireObservation(-121.7, 51.3, "active_fire"),),
+        )
+        with TemporaryDirectory() as tmpdir:
+            active_cache = Path(tmpdir) / "active.json"
+            fire_activity.write_cache(cached, active_cache)
+            with (
+                mock.patch.object(
+                    fire_activity,
+                    "download_active_fires",
+                    side_effect=requests.Timeout("offline"),
+                ),
+                mock.patch.object(fire_activity, "download_hotspots") as hotspots,
+            ):
+                result = fire_activity.load_fire_activity(
+                    active_cache,
+                    Path(tmpdir) / "hotspots.json",
+                    now=now,
+                )
+
+        hotspots.assert_not_called()
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertTrue(result.is_active_fire_feed)
+        self.assertTrue(result.cached)
+        self.assertTrue(result.stale)
+
 
 if __name__ == "__main__":
     unittest.main()

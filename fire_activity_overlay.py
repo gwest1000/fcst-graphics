@@ -21,6 +21,7 @@ import fire_activity
 import make_hrdps_fire_weather_twopanel as firewx
 import make_hrdps_west_lightning as lightning
 import plot_style
+import project_paths
 from r2_publish import (
     MANIFEST_CACHE_CONTROL,
     R2Config,
@@ -31,7 +32,7 @@ from r2_publish import (
 )
 
 
-OUTPUT_DIR = Path("plots/fire_activity_overlay")
+OUTPUT_DIR = project_paths.plot_path("fire_activity_overlay")
 STATE_PATH = Path("logs/state/fire_activity_overlay.json")
 LOCK_PATH = Path("logs/state/fire_activity_overlay.lock")
 MANIFEST_KEY = "manifests/fire_activity.json"
@@ -48,15 +49,9 @@ class OverlaySpec:
 
 OVERLAY_SPECS = (
     OverlaySpec("continental_lightning_twopanel", "continental", "bc"),
-    OverlaySpec("lightning_sw", "west", "sw"),
-    OverlaySpec("lightning_se", "west", "se"),
-    OverlaySpec("lightning_ne", "west", "ne"),
 )
 MINIMUM_BASE_RUN = {
     "continental_lightning_twopanel": "20260722T12Z",
-    "lightning_sw": "20260721T12Z",
-    "lightning_se": "20260721T12Z",
-    "lightning_ne": "20260721T12Z",
 }
 
 

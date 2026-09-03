@@ -34,6 +34,7 @@ import fire_danger_verification
 import make_experimental_danger_class as danger_base
 import make_hrdps_west_convective as hrdps
 import plot_style
+import project_paths
 from make_hrdps_west_fourpanel import crop, hour_file
 from make_hrdps_west_lightning import (
     DATA_CRS,
@@ -56,6 +57,11 @@ SURFACE_FIELDS = (
 STATE_VERSION = 4
 DANGER_DISPLAY_SMOOTHING_KM = 2.0
 DANGER_CONTOUR_LEVELS = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
+MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS = fire_danger_peak.MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS
+
+
+class CWFISDataUnavailableError(RuntimeError):
+    """No sufficiently recent observed CWFIS state can support the forecast time."""
 
 
 @dataclass(frozen=True)
@@ -94,11 +100,16 @@ def anchor_time_utc(anchor_date: dt.date) -> dt.datetime:
     return dt.datetime.combine(anchor_date, dt.time(20, 0), tzinfo=dt.timezone.utc)
 
 
+def anchor_age_hours(anchor_date: dt.date, valid_utc: dt.datetime) -> float:
+    return (valid_utc - anchor_time_utc(anchor_date)).total_seconds() / 3600.0
+
+
 def candidate_anchor_dates(init_time: dt.datetime, count: int = 4) -> Iterator[dt.date]:
     local_date = init_time.astimezone(plot_style.LOCAL_TZ).date()
     for offset in range(count):
         candidate = local_date - dt.timedelta(days=offset)
-        if anchor_time_utc(candidate) <= init_time:
+        age_hours = anchor_age_hours(candidate, init_time)
+        if 0.0 <= age_hours <= MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS:
             yield candidate
 
 
@@ -177,17 +188,6 @@ def fill_nearest_valid(data: np.ndarray) -> np.ndarray:
         raise RuntimeError("CWFIS anchor raster contains no valid values.")
     nearest = distance_transform_edt(~valid, return_distances=False, return_indices=True)
     return data[tuple(nearest)].astype(np.float32, copy=False)
-
-
-def smooth_danger_for_display(danger: np.ndarray) -> np.ndarray:
-    """Lightly smooth categorical danger for rendering while preserving its validity mask."""
-
-    valid = np.isfinite(danger)
-    smoothed = hrdps.smooth_nan(
-        danger,
-        sigma=hrdps.sigma_for_km(DANGER_DISPLAY_SMOOTHING_KM),
-    )
-    return np.where(valid, smoothed, np.nan).astype(np.float32)
 
 
 def anchor_cache_path(
@@ -406,6 +406,33 @@ def previous_checkpoint(
     return None
 
 
+def try_advance_bridge(
+    anchor_state: fwi2025.FWI2025State,
+    bridge_run: hrdps.RunInfo,
+    data_dir: Path,
+    grid: ModelGrid,
+    anchor_date: dt.date,
+    target_time: dt.datetime,
+) -> fwi2025.FWI2025State | None:
+    """Advance a historical bridge when complete, otherwise allow bootstrap fallback."""
+
+    try:
+        return advance_state(
+            anchor_state,
+            bridge_run,
+            data_dir / bridge_run.stamp,
+            grid,
+            anchor_time_utc(anchor_date),
+            target_time,
+        )
+    except Exception as exc:
+        log(
+            f"Hourly bridge {bridge_run.stamp} is incomplete for CWFIS "
+            f"{anchor_date:%Y-%m-%d}: {exc}"
+        )
+        return None
+
+
 def initialize_evolution(
     run: hrdps.RunInfo,
     data_dir: Path,
@@ -431,16 +458,17 @@ def initialize_evolution(
         bridge_run = find_bridge_run(data_dir, anchor_time_utc(anchor_date), run.init_time)
         if bridge_run is not None:
             log(f"Bridging CWFIS {anchor_date:%Y-%m-%d} to {run.stamp} with hourly {bridge_run.stamp} fields.")
-            state = advance_state(
+            state = try_advance_bridge(
                 anchor_state,
                 bridge_run,
-                data_dir / bridge_run.stamp,
+                data_dir,
                 grid,
-                anchor_time_utc(anchor_date),
+                anchor_date,
                 run.init_time,
             )
-            save_checkpoint(cache_dir, model_key, run, 0, anchor_date, state)
-            return EvolutionStart(state, anchor_date, 0)
+            if state is not None:
+                save_checkpoint(cache_dir, model_key, run, 0, anchor_date, state)
+                return EvolutionStart(state, anchor_date, 0)
         latest_date = dt.datetime.now(dt.timezone.utc).astimezone(plot_style.LOCAL_TZ).date()
         latest_lead = int((anchor_time_utc(latest_date) - run.init_time).total_seconds() // 3600)
         if allow_bootstrap and 0 <= latest_lead <= 48:
@@ -457,9 +485,10 @@ def initialize_evolution(
             save_checkpoint(cache_dir, model_key, run, lead, latest_date, state)
             return EvolutionStart(state, latest_date, lead, bootstrap=True)
 
-    raise RuntimeError(
-        "No valid CWFIS-to-initialization bridge exists. Keep the preceding run's hourly surface data/checkpoint, "
-        "or use --allow-bootstrap once to start at the next observed anchor without publishing earlier frames."
+    raise CWFISDataUnavailableError(
+        f"No observed CWFIS FFMC/DMC/DC anchor no more than "
+        f"{MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS} hours old at HRDPS initialization "
+        "can be connected to this run."
     )
 
 
@@ -519,7 +548,12 @@ def iter_evolved_fields(
         *,
         allow_partial: bool,
     ) -> tuple[np.ndarray, Path]:
-        peak_danger = danger_base.classify_danger(peak_day.fwi, peak_day.bui, regions)
+        peak_danger = danger_base.classify_smoothed_danger(
+            peak_day.fwi,
+            peak_day.bui,
+            regions,
+            sigma=hrdps.sigma_for_km(fire_danger_peak.PEAK_DANGER_SMOOTHING_KM),
+        )
         peak_danger = np.where(in_bc, peak_danger, np.nan).astype(np.float32)
         peak_path = fire_danger_peak.save_peak_danger_grid(
             cache_dir,
@@ -528,6 +562,7 @@ def iter_evolved_fields(
             run.init_time,
             peak_day,
             peak_danger,
+            anchor_time_utc=anchor_time_utc(start.anchor_date),
             allow_partial=allow_partial,
         )
         saved_peak_dates.append(peak_day.fire_date)
@@ -574,9 +609,16 @@ def iter_evolved_fields(
 
         if fhour in requested:
             if classification == "schedule2":
-                danger = danger_base.classify_danger(fwi, bui, regions)
+                danger = danger_base.classify_smoothed_danger(
+                    fwi,
+                    bui,
+                    regions,
+                    sigma=hrdps.sigma_for_km(DANGER_DISPLAY_SMOOTHING_KM),
+                )
             else:
-                danger = fwi2025.adjective_class(fwi)
+                danger = fwi2025.adjective_class(
+                    hrdps.smooth_nan(fwi, sigma=hrdps.sigma_for_km(DANGER_DISPLAY_SMOOTHING_KM))
+                )
             danger = np.where(in_bc, danger, np.nan).astype(np.float32)
             frame = EvolvedFields(
                 fhour,
@@ -645,11 +687,11 @@ def plot_evolved_danger(
     hrdps.add_map_features(ax)
     cmap, norm = danger_base.danger_cmap()
     sample = slice(None, None, max(1, int(plot_stride)))
-    display_danger = smooth_danger_for_display(fields.danger)
+    regions = danger_base.danger_regions(grid.lon, grid.lat)
     shaded = ax.contourf(
         grid.lon[sample, sample],
         grid.lat[sample, sample],
-        display_danger[sample, sample],
+        fields.danger[sample, sample],
         levels=DANGER_CONTOUR_LEVELS,
         cmap=cmap,
         norm=norm,
@@ -663,7 +705,6 @@ def plot_evolved_danger(
     if classification == "schedule2":
         bc_geometry = danger_base.load_bc_geometry()
         in_bc = contains_xy(bc_geometry, grid.lon, grid.lat)
-        regions = danger_base.danger_regions(grid.lon, grid.lat)
         danger_base.draw_region_boundaries(ax, regions, grid.lon, grid.lat, in_bc)
     hrdps.add_city_labels(ax, fontsize=7.0, marker_size=2.0, path_width=2.3, zorder=30)
     tick_labels = ["Very low", "Low", "Moderate", "High", "Extreme"] if classification == "schedule2" else ["Low", "Moderate", "High", "Very high", "Extreme"]
@@ -698,6 +739,57 @@ def plot_evolved_danger(
     plt.close(fig)
 
 
+def plot_unavailable_danger(
+    out_path: Path,
+    run: hrdps.RunInfo,
+    fhour: int,
+    watersheds: list,
+    transmission_lines: list,
+    extent: tuple[float, float, float, float],
+) -> None:
+    fig = plt.figure(figsize=plot_style.PLOT_FIGSIZE, dpi=plot_style.PLOT_DPI, facecolor="white")
+    ax = fig.add_axes(plot_style.SINGLE_PANEL_AX_POS, projection=PLOT_CRS)
+    ax.set_extent(extent, crs=DATA_CRS)
+    ax.set_facecolor("#dbeaf0")
+    hrdps.add_map_features(ax)
+    hrdps.add_hydro_features(ax)
+    add_transmission_lines(ax, transmission_lines)
+    hrdps.add_watersheds(ax, watersheds)
+    hrdps.add_city_labels(ax, fontsize=7.0, marker_size=2.0, path_width=2.3, zorder=30)
+    ax.text(
+        0.5,
+        0.54,
+        "CWFIS data not available",
+        transform=ax.transAxes,
+        ha="center",
+        va="center",
+        fontsize=15,
+        fontweight="bold",
+        color="#222222",
+        bbox={"facecolor": "white", "edgecolor": "#555555", "linewidth": 0.8, "pad": 7.0},
+        zorder=50,
+    )
+    valid = run.init_time + dt.timedelta(hours=fhour)
+    valid_local = valid.astimezone(plot_style.LOCAL_TZ)
+    plot_style.add_single_panel_text(
+        ax,
+        (
+            f"{hrdps.model_config().label} EXPERIMENTAL HOURLY BC FIRE DANGER  |  "
+            f"F{fhour:03d}  {valid_local:%a %H:%M%Z %d%b%Y}"
+        ).upper(),
+        (
+            f"No CWFIS FFMC/DMC/DC anchor <= {MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS} h old "
+            "at HRDPS initialization; "
+            "fire-danger shading unavailable; other HRDPS products are unaffected"
+        ),
+        run,
+        source_label="ECCC HRDPS",
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, facecolor=fig.get_facecolor())
+    plt.close(fig)
+
+
 def make_plots(
     run: hrdps.RunInfo,
     data_dir: Path,
@@ -715,31 +807,49 @@ def make_plots(
     transmission_lines = load_transmission_lines()
     run_output = output_dir / run.stamp
     prefix = f"{hrdps.model_config().output_prefix}_fwi2025_danger"
-    paths = []
-    for fields in iter_evolved_fields(
-        run,
-        data_dir,
-        cache_dir,
-        hrdps.model_config().extent,
-        requested,
-        grid,
-        classification,
-        allow_bootstrap,
-    ):
-        out_path = run_output / f"{prefix}_{run.stamp}_f{fields.fhour:03d}.png"
-        plot_evolved_danger(
+    paths: list[Path] = []
+    rendered_hours: set[int] = set()
+    try:
+        for fields in iter_evolved_fields(
+            run,
+            data_dir,
+            cache_dir,
+            hrdps.model_config().extent,
+            requested,
+            grid,
+            classification,
+            allow_bootstrap,
+        ):
+            out_path = run_output / f"{prefix}_{run.stamp}_f{fields.fhour:03d}.png"
+            plot_evolved_danger(
+                out_path,
+                run,
+                grid,
+                fields,
+                watersheds,
+                transmission_lines,
+                hrdps.model_config().extent,
+                classification,
+                plot_stride,
+            )
+            paths.append(out_path)
+            rendered_hours.add(fields.fhour)
+            log(f"Wrote {out_path}")
+    except CWFISDataUnavailableError as exc:
+        log(str(exc))
+
+    for fhour in sorted(set(requested) - rendered_hours):
+        out_path = run_output / f"{prefix}_{run.stamp}_f{fhour:03d}.png"
+        plot_unavailable_danger(
             out_path,
             run,
-            grid,
-            fields,
+            fhour,
             watersheds,
             transmission_lines,
             hrdps.model_config().extent,
-            classification,
-            plot_stride,
         )
         paths.append(out_path)
-        log(f"Wrote {out_path}")
+        log(f"Wrote unavailable-CWFIS placeholder {out_path}")
     return paths
 
 
@@ -748,7 +858,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser.add_argument("stamp", help="HRDPS run stamp, e.g. 20260709T12Z")
     parser.add_argument("--model", choices=sorted(hrdps.MODEL_CONFIGS), default="west")
     parser.add_argument("--data-dir", type=Path, default=None)
-    parser.add_argument("--output-dir", type=Path, default=Path("plots/experimental_fwi2025_danger"))
+    parser.add_argument("--output-dir", type=Path, default=project_paths.plot_path("experimental_fwi2025_danger"))
     parser.add_argument("--cache-dir", type=Path, default=FWI_CACHE_DIR)
     parser.add_argument("--hours", default=",".join(str(hour) for hour in FORECAST_HOURS))
     parser.add_argument("--classification", choices=("fwi2025", "schedule2"), default="schedule2")

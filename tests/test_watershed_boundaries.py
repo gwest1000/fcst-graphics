@@ -1,12 +1,9 @@
-from pathlib import Path
 import unittest
 
 import automate_hrdps_west as automation
 import make_ensemble_control_fourpanel as ensemble
 import make_hrdps_west_convective as hrdps
-
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
+import project_paths
 
 
 class WatershedBoundaryTest(unittest.TestCase):
@@ -14,7 +11,7 @@ class WatershedBoundaryTest(unittest.TestCase):
         hrdps.set_model("west")
 
     def test_all_plot_families_share_bch_watershed_source(self) -> None:
-        expected = Path("data/bc_watersheds/bch/AllWatershedsUTM.shp")
+        expected = project_paths.static_data_path("bc_watersheds", "bch", "AllWatershedsUTM.shp")
 
         self.assertEqual(hrdps.WATERSHED_CACHE, expected)
         self.assertEqual(ensemble.WATERSHED_CACHE, expected)
@@ -27,7 +24,7 @@ class WatershedBoundaryTest(unittest.TestCase):
 
     def test_bch_watersheds_load_as_valid_lon_lat_polygons(self) -> None:
         hrdps.set_model("west")
-        watersheds = hrdps.load_watersheds(PROJECT_ROOT / hrdps.WATERSHED_CACHE)
+        watersheds = hrdps.load_watersheds(hrdps.WATERSHED_CACHE)
 
         self.assertEqual(len(watersheds), 54)
         self.assertTrue(all(geom.is_valid and not geom.is_empty for geom in watersheds))

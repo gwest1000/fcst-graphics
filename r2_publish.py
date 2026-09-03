@@ -30,6 +30,8 @@ from publish_hrdps_west import (
 from make_hrdps_west_convective import parse_stamp
 
 FORECAST_KEEP_DAYS = 7
+FORECAST_FULL_RUN_KEEP_HOURS = 72
+FORECAST_RETAINED_CYCLES = frozenset({0, 6, 12})
 IMAGE_CACHE_CONTROL = "public, max-age=31536000, immutable"
 MANIFEST_CACHE_CONTROL = "no-cache, max-age=0, must-revalidate"
 PUBLISH_FORMAT_VERSION = "pngquant-70-90-speed1-v1"
@@ -48,16 +50,6 @@ MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
         "continental_lightning_verif",
         "fire_danger_verif",
     ),
-    "west": (
-        "lightning_sw",
-        "lightning_se",
-        "lightning_ne",
-        "wind_south_coast",
-        "temperature_south",
-        "temperature_north",
-        "fwi2025_danger",
-        "lightning_verif",
-    ),
     "gefs_control": ("gefs_control_fourpanel",),
     "ecmwf_control": (
         "ecmwf_control_fourpanel",
@@ -68,7 +60,6 @@ MODEL_PRODUCTS: dict[str, tuple[str, ...]] = {
 
 DEFAULT_PRODUCTS = {
     "continental": "continental_fourpanel",
-    "west": "lightning_sw",
     "gefs_control": "gefs_control_fourpanel",
     "ecmwf_control": "ecmwf_control_fourpanel",
     "ecmwf_ensemble": "ecmwf_ensemble_spread_500",
@@ -76,13 +67,6 @@ DEFAULT_PRODUCTS = {
 
 RETIRED_PRODUCTS: dict[str, tuple[str, ...]] = {
     "continental": ("continental_convective", "continental_lightning"),
-    "west": (
-        "convective",
-        "temperature_sw",
-        "temperature_se",
-        "temperature_ne",
-        "wind_sw",
-    ),
 }
 RETIRED_PRODUCTS_VERSION = "2026-08-07-v3"
 
@@ -266,21 +250,32 @@ class PublishState:
         retained = []
         for row in rows:
             init = parse_stamp(str(row["stamp"]))
-            keep_days = retention_days(str(row["product_key"]))
-            if init >= now - dt.timedelta(days=keep_days):
+            if run_is_retained(str(row["product_key"]), init, now):
                 retained.append(row)
         return retained
 
-    def prune_expired(self, model: str, now: dt.datetime | None = None) -> int:
+    def expired_keys(self, model: str, now: dt.datetime | None = None) -> list[str]:
         retained_keys = {str(row["object_key"]) for row in self.retained_rows(model, now)}
         rows = self.connection.execute(
             "SELECT object_key FROM artifacts WHERE model = ?", (model,)
         ).fetchall()
-        expired = [str(row["object_key"]) for row in rows if str(row["object_key"]) not in retained_keys]
-        if expired:
-            self.connection.executemany("DELETE FROM artifacts WHERE object_key = ?", ((key,) for key in expired))
+        return [
+            str(row["object_key"])
+            for row in rows
+            if str(row["object_key"]) not in retained_keys
+        ]
+
+    def forget(self, object_keys: Iterable[str]) -> int:
+        keys = tuple(dict.fromkeys(object_keys))
+        if keys:
+            self.connection.executemany(
+                "DELETE FROM artifacts WHERE object_key = ?", ((key,) for key in keys)
+            )
             self.connection.commit()
-        return len(expired)
+        return len(keys)
+
+    def prune_expired(self, model: str, now: dt.datetime | None = None) -> int:
+        return self.forget(self.expired_keys(model, now))
 
     def prune_inactive_products(self, model: str, active_products: Iterable[str]) -> int:
         active = tuple(active_products)
@@ -308,6 +303,23 @@ def retention_class(product_key: str) -> str:
     return "verification" if product_key in VERIFICATION_PRODUCT_KEYS else "forecast"
 
 
+def run_is_retained(
+    product_key: str,
+    init: dt.datetime,
+    now: dt.datetime | None = None,
+) -> bool:
+    """Keep every recent forecast run, then only standard 00/06/12 UTC cycles."""
+
+    now = now or dt.datetime.now(dt.timezone.utc)
+    if init < now - dt.timedelta(days=retention_days(product_key)):
+        return False
+    if product_key in VERIFICATION_PRODUCT_KEYS:
+        return True
+    if init >= now - dt.timedelta(hours=FORECAST_FULL_RUN_KEEP_HOURS):
+        return True
+    return init.hour in FORECAST_RETAINED_CYCLES
+
+
 def object_key_for(model: str, product_key: str, stamp: str, filename: str) -> str:
     return f"models/{model}/{retention_class(product_key)}/{product_key}/{stamp}/{filename}"
 
@@ -328,8 +340,6 @@ def candidate_stamps(model: str, sync_retained: bool, requested_stamp: str | Non
         root = source_root(product_key)
         if not root.exists():
             continue
-        keep_days = retention_days(product_key)
-        cutoff = now - dt.timedelta(days=keep_days)
         for child in root.iterdir():
             if not child.is_dir():
                 continue
@@ -337,7 +347,7 @@ def candidate_stamps(model: str, sync_retained: bool, requested_stamp: str | Non
                 init = parse_stamp(child.name)
             except ValueError:
                 continue
-            if init >= cutoff:
+            if run_is_retained(product_key, init, now):
                 stamps.add(child.name)
     return sorted(stamps)
 
@@ -353,7 +363,7 @@ def discover_frames(
     for stamp in sorted(set(stamps)):
         init = parse_stamp(stamp)
         for product_key in MODEL_PRODUCTS[model]:
-            if enforce_retention and init < now - dt.timedelta(days=retention_days(product_key)):
+            if enforce_retention and not run_is_retained(product_key, init, now):
                 continue
             product = PRODUCTS[product_key]
             plot_dir = source_root(product_key) / stamp
@@ -465,6 +475,29 @@ def upload_frame(client, config: R2Config, frame: LocalFrame, body_path: Path, s
     retry(put, f"Upload {frame.object_key}")
 
 
+def delete_object_keys(client, config: R2Config, object_keys: Iterable[str]) -> int:
+    keys = tuple(sorted(set(object_keys)))
+    deleted = 0
+    for offset in range(0, len(keys), 1000):
+        batch = keys[offset : offset + 1000]
+        response = retry(
+            lambda batch=batch: client.delete_objects(
+                Bucket=config.bucket,
+                Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True},
+            ),
+            f"Delete {len(batch)} expired R2 objects",
+        )
+        errors = response.get("Errors", ()) if isinstance(response, Mapping) else ()
+        if errors:
+            summary = ", ".join(
+                f"{item.get('Key', '?')}: {item.get('Code', 'unknown')}"
+                for item in errors[:5]
+            )
+            raise RuntimeError(f"R2 reported {len(errors)} object deletion errors: {summary}")
+        deleted += len(batch)
+    return deleted
+
+
 def purge_retired_objects(client, config: R2Config, model: str) -> int:
     deleted = 0
     for product_key in RETIRED_PRODUCTS.get(model, ()):
@@ -479,16 +512,7 @@ def purge_retired_objects(client, config: R2Config, model: str) -> int:
                 f"List retired prefix {prefix}",
             )
             keys = [str(item["Key"]) for item in response.get("Contents", ())]
-            for offset in range(0, len(keys), 1000):
-                batch = keys[offset : offset + 1000]
-                retry(
-                    lambda batch=batch: client.delete_objects(
-                        Bucket=config.bucket,
-                        Delete={"Objects": [{"Key": key} for key in batch], "Quiet": True},
-                    ),
-                    f"Delete retired prefix {prefix}",
-                )
-                deleted += len(batch)
+            deleted += delete_object_keys(client, config, keys)
             if not response.get("IsTruncated"):
                 break
             continuation_token = str(response["NextContinuationToken"])
@@ -570,6 +594,8 @@ def build_manifest(
         "model": model,
         "generated": generated.isoformat().replace("+00:00", "Z"),
         "retentionDays": FORECAST_KEEP_DAYS,
+        "fullRunRetentionHours": FORECAST_FULL_RUN_KEEP_HOURS,
+        "retainedCyclesAfterFullRunWindow": sorted(FORECAST_RETAINED_CYCLES),
         "verificationRetentionDays": VERIFICATION_KEEP_DAYS,
         "defaultProduct": DEFAULT_PRODUCTS[model],
         "runs": ordered_runs,
@@ -590,6 +616,14 @@ def upload_manifest(client, config: R2Config, model: str, manifest: Mapping[str,
         f"Upload {key}",
     )
     return f"{config.public_base_url}/{key}"
+
+
+def manifest_content_sha256(manifest: Mapping[str, object]) -> str:
+    """Hash the user-visible manifest content, excluding its generation timestamp."""
+    stable = dict(manifest)
+    stable.pop("generated", None)
+    payload = json.dumps(stable, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def publish_model(
@@ -644,13 +678,23 @@ def publish_model(
                 frame, sha256 = future.result()
                 state.record(frame, sha256)
                 uploaded += 1
-        pruned = state.prune_expired(model)
+        expired_keys = state.expired_keys(model)
         manifest = build_manifest(model, state.retained_rows(model), config.public_base_url)
-        manifest_url = upload_manifest(client, config, model, manifest)
+        manifest_url = f"{config.public_base_url}/manifests/{model}.json"
+        manifest_hash = manifest_content_sha256(manifest)
+        manifest_metadata_key = f"manifest_sha256:{model}"
+        manifest_uploaded = state.metadata(manifest_metadata_key) != manifest_hash
+        if manifest_uploaded:
+            upload_manifest(client, config, model, manifest)
+            state.set_metadata(manifest_metadata_key, manifest_hash)
+        remote_deleted = delete_object_keys(client, config, expired_keys)
+        pruned = state.forget(expired_keys)
         print(
             f"R2 {model}: uploaded={uploaded}, unchanged={skipped}, incomplete={incomplete}, "
-            f"state_pruned={pruned}, inactive_pruned={inactive_pruned}, retired_deleted={retired_deleted}, "
-            f"runs={len(manifest['runs'])}, manifest={manifest_url}",
+            f"remote_deleted={remote_deleted}, state_pruned={pruned}, "
+            f"inactive_pruned={inactive_pruned}, retired_deleted={retired_deleted}, "
+            f"runs={len(manifest['runs'])}, manifest_uploaded={manifest_uploaded}, "
+            f"manifest={manifest_url}",
             flush=True,
         )
         return {
@@ -658,9 +702,11 @@ def publish_model(
             "uploaded": uploaded,
             "unchanged": skipped,
             "incomplete": incomplete,
+            "remote_deleted": remote_deleted,
             "state_pruned": pruned,
             "inactive_pruned": inactive_pruned,
             "retired_deleted": retired_deleted,
+            "manifest_uploaded": manifest_uploaded,
             "manifest_url": manifest_url,
             "runs": len(manifest["runs"]),
         }

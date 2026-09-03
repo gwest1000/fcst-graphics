@@ -7,7 +7,13 @@ import argparse
 import os
 from typing import Iterable
 
-from r2_publish import MODEL_PRODUCTS, R2Config, boto3_client
+from r2_publish import (
+    FORECAST_KEEP_DAYS,
+    MODEL_PRODUCTS,
+    R2Config,
+    VERIFICATION_KEEP_DAYS,
+    boto3_client,
+)
 
 
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
@@ -18,6 +24,27 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
         help="Browser origin allowed to fetch model manifests.",
     )
     return parser.parse_args(list(argv))
+
+
+def lifecycle_rules() -> list[dict[str, object]]:
+    rules = [
+        {
+            "ID": "expire-all-model-data",
+            "Status": "Enabled",
+            "Filter": {"Prefix": "models/"},
+            "Expiration": {"Days": VERIFICATION_KEEP_DAYS + 1},
+        }
+    ]
+    for model in MODEL_PRODUCTS:
+        rules.append(
+            {
+                "ID": f"expire-{model.replace('_', '-')}-forecasts",
+                "Status": "Enabled",
+                "Filter": {"Prefix": f"models/{model}/forecast/"},
+                "Expiration": {"Days": FORECAST_KEEP_DAYS + 1},
+            }
+        )
+    return rules
 
 
 def main(argv: Iterable[str]) -> int:
@@ -43,23 +70,7 @@ def main(argv: Iterable[str]) -> int:
             ]
         },
     )
-    rules = [
-        {
-            "ID": "expire-all-model-data",
-            "Status": "Enabled",
-            "Filter": {"Prefix": "models/"},
-            "Expiration": {"Days": 61},
-        }
-    ]
-    for model in MODEL_PRODUCTS:
-        rules.append(
-            {
-                "ID": f"expire-{model.replace('_', '-')}-forecasts",
-                "Status": "Enabled",
-                "Filter": {"Prefix": f"models/{model}/forecast/"},
-                "Expiration": {"Days": 8},
-            }
-        )
+    rules = lifecycle_rules()
     client.put_bucket_lifecycle_configuration(
         Bucket=config.bucket,
         LifecycleConfiguration={"Rules": rules},

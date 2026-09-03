@@ -33,6 +33,7 @@ import make_hrdps_west_convective as hrdps
 import make_hrdps_west_lightning as lightning
 import lightning_ml_archive as ml_archive
 import plot_style
+import project_paths
 from publish_hrdps_west import DEFAULT_PAGES_REPO, publish, write_manifest
 
 LIGHTNING_OBS_URL = "https://dd.weather.gc.ca/today/lightning"
@@ -41,17 +42,17 @@ LPI_CACHE_RE = re.compile(r"_f(?P<fhour>\d{3})_lpi\.npz$")
 LOCK_PATH = Path("logs/lpi_verification.lock")
 PUBLISH_LOCK = Path("logs/hrdps_publish.lock")
 STATUS_PATH = Path("logs/state/lpi_verification.status.json")
-DEFAULT_OBS_DIR = Path("data/lightning_obs")
-DEFAULT_WEST_CACHE_DIR = Path("plots/hrdps_west_lightning")
-DEFAULT_CONTINENTAL_CACHE_DIR = Path("plots/hrdps_continental_lightning")
-DEFAULT_WEST_OUTPUT_DIR = Path("plots/hrdps_west_lightning_verif")
-DEFAULT_CONTINENTAL_OUTPUT_DIR = Path("plots/hrdps_continental_lightning_verif")
+DEFAULT_OBS_DIR = project_paths.data_path("lightning_obs")
+DEFAULT_CONTINENTAL_CACHE_DIR = project_paths.plot_path("hrdps_continental_lightning")
+DEFAULT_CONTINENTAL_OUTPUT_DIR = project_paths.plot_path("hrdps_continental_lightning_verif")
 OBS_LOW_FLASH_KM2 = 0.05
 OBS_MED_FLASH_KM2 = 0.50
 OBS_HIGH_FLASH_KM2 = 2.00
 OBS_CONTOUR_COLORS = ("#a97700", "#e06400", "#c41424")
 OBS_CONTOUR_WIDTHS = (0.95, 1.30, 1.75)
-DAILY_VERIFICATION_KEEP_DAYS = 60
+# Rendered verification images follow the public archive. Compact observations and
+# model ingredients are retained independently by lightning_ml_archive.py.
+DAILY_VERIFICATION_KEEP_DAYS = 14
 LPI_TUNING_MIN_ARCHIVE_DAYS = 21
 LPI_TUNING_READY_MARKER = Path("logs/state/lpi_tuning_ready.notified")
 
@@ -196,15 +197,13 @@ def notify_lpi_tuning_ready(readiness: dict[str, object]) -> bool:
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--obs-dir", type=Path, default=DEFAULT_OBS_DIR)
-    parser.add_argument("--west-cache-dir", type=Path, default=DEFAULT_WEST_CACHE_DIR)
     parser.add_argument("--continental-cache-dir", type=Path, default=DEFAULT_CONTINENTAL_CACHE_DIR)
-    parser.add_argument("--west-output-dir", type=Path, default=DEFAULT_WEST_OUTPUT_DIR)
     parser.add_argument("--continental-output-dir", type=Path, default=DEFAULT_CONTINENTAL_OUTPUT_DIR)
     parser.add_argument("--pages-repo", type=Path, default=DEFAULT_PAGES_REPO)
     parser.add_argument("--ml-archive-root", type=Path, default=ml_archive.DEFAULT_ARCHIVE_ROOT)
     parser.add_argument("--keep-days", type=int, default=DAILY_VERIFICATION_KEEP_DAYS)
     parser.add_argument("--workers", type=int, default=8)
-    parser.add_argument("--model", choices=["all", "west", "continental"], default="all")
+    parser.add_argument("--model", choices=["continental"], default="continental")
     parser.add_argument("--stamps", default=None, help="Comma-separated run stamps to verify.")
     parser.add_argument("--force", action="store_true")
     parser.add_argument("--mirror-only", action="store_true")
@@ -347,8 +346,8 @@ def load_lpi_cache(path: Path) -> LpiCache:
     with np.load(path) as cached:
         cache_version = int(cached["version"][0]) if "version" in cached else 1
         formula_version = npz_string(cached, "formula_version", "legacy_v1")
-        model_key = npz_string(cached, "model_key", "west")
-        model_label = npz_string(cached, "model_label", "HRDPS-West 1 km")
+        model_key = npz_string(cached, "model_key", "continental")
+        model_label = npz_string(cached, "model_label", "HRDPS 2.5 km")
         source_label = npz_string(cached, "source_label", "ECCC HRDPS")
         stamp = npz_string(cached, "run_stamp")
         init_iso = npz_string(cached, "init_iso")
@@ -371,11 +370,7 @@ def load_lpi_cache(path: Path) -> LpiCache:
 
 
 def find_lpi_cache_groups(args: argparse.Namespace) -> dict[tuple[str, str], dict[int, Path]]:
-    roots: list[tuple[str, Path]] = []
-    if args.model in {"all", "west"}:
-        roots.append(("west", args.west_cache_dir))
-    if args.model in {"all", "continental"}:
-        roots.append(("continental", args.continental_cache_dir))
+    roots: list[tuple[str, Path]] = [("continental", args.continental_cache_dir)]
 
     stamps = {item.strip() for item in args.stamps.split(",")} if args.stamps else None
     cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=args.keep_days)
@@ -505,24 +500,18 @@ def read_obs_window(
 def output_dir_for_model(args: argparse.Namespace, model_key: str) -> Path:
     if model_key == "continental":
         return args.continental_output_dir
-    if model_key == "west":
-        return args.west_output_dir
     raise ValueError(f"Unsupported model for LPI verification: {model_key}")
 
 
 def product_model_for_forecast_model(model_key: str) -> str:
     if model_key == "continental":
         return "continental_verif"
-    if model_key == "west":
-        return "west_verif"
     raise ValueError(f"Unsupported model for LPI verification: {model_key}")
 
 
 def output_prefix_for_model(model_key: str) -> str:
     if model_key == "continental":
         return "hrdps_continental_lightning_verif"
-    if model_key == "west":
-        return "hrdps_west_lightning_verif"
     raise ValueError(f"Unsupported model for LPI verification: {model_key}")
 
 
@@ -573,6 +562,11 @@ def aggregate_daily_lpi(paths_by_hour: dict[int, Path], window: DailyLpiWindow) 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
         potential = np.nanmax(np.stack(stack), axis=0)
+    smoothing_km = lightning.lpi_display_smoothing_km(first.model_key)
+    potential = lightning.smooth_nan(
+        potential,
+        sigma=smoothing_km / ml_archive.MODEL_RESOLUTION_KM,
+    )
 
     return DailyLpiForecast(
         formula_version=first.formula_version,
@@ -616,7 +610,7 @@ def expected_verification_name(model_key: str, stamp: str) -> str | None:
 
 def prune_superseded_local_frames(args: argparse.Namespace) -> list[Path]:
     removed: list[Path] = []
-    for model_key in ("west", "continental"):
+    for model_key in ("continental",):
         output_dir = output_dir_for_model(args, model_key)
         if not output_dir.exists():
             continue
@@ -653,7 +647,7 @@ def prune_superseded_pages_frames(args: argparse.Namespace) -> list[Path]:
     for run_dir in images_root.iterdir():
         if not run_dir.is_dir():
             continue
-        for model_key in ("west", "continental"):
+        for model_key in ("continental",):
             try:
                 expected_name = expected_verification_name(model_key, run_dir.name)
             except ValueError:
@@ -757,7 +751,7 @@ def render_ready_verifications(args: argparse.Namespace) -> list[Path]:
     watershed_cache: dict[str, list[BaseGeometry]] = {}
     transmission_cache: dict[str, list[BaseGeometry]] = {}
     for (model_key, stamp), paths_by_hour in sorted(find_lpi_cache_groups(args).items()):
-        if model_key not in {"west", "continental"}:
+        if model_key != "continental":
             continue
         run = hrdps.RunInfo(cycle=stamp[-3:-1], stamp=stamp, init_time=hrdps.parse_stamp(stamp))
         window = first_full_12z_window(run)
@@ -882,8 +876,6 @@ def publish_generated(args: argparse.Namespace, generated: list[Path]) -> None:
         stamp = path.parent.name
         if path.name.startswith("hrdps_continental_lightning_verif_"):
             targets.add(("continental", stamp))
-        elif path.name.startswith("hrdps_west_lightning_verif_"):
-            targets.add(("west", stamp))
 
     with publish_lock():
         for model_key, stamp in sorted(targets):
@@ -940,7 +932,6 @@ def main(argv: Iterable[str]) -> int:
             except OSError as exc:
                 tuning_readiness = {"ready": False, "error": str(exc)}
                 tuning_notification_sent = False
-            prune_local_plots(args.west_output_dir, args.keep_days)
             prune_local_plots(args.continental_output_dir, args.keep_days)
             removed_local = prune_superseded_local_frames(args)
             generated: list[Path] = []

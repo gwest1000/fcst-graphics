@@ -11,7 +11,7 @@ import math
 import os
 import sys
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Iterable
 
@@ -35,6 +35,7 @@ from shapely.geometry.base import BaseGeometry
 import gust_diagnostics
 import fire_danger_peak
 import plot_style
+import project_paths
 import make_hrdps_west_convective as hrdps
 from make_hrdps_west_convective import (
     MODEL_CONFIGS,
@@ -85,11 +86,15 @@ DATA_CRS = ccrs.PlateCarree()
 PLOT_CRS = ccrs.LambertConformal(central_longitude=-123.0, central_latitude=53.0)
 LPI_CACHE_VERSION = 3
 LPI_FORMULA_VERSION = "bc_lpi_v3_3hmax"
+LPI_DISPLAY_SMOOTHING_KM = {
+    "continental": 10.0,
+    "west": 10.0,
+}
 DRY_AIR_GAS_CONSTANT_J_KG_K = 287.05
 GRAVITY_MS2 = 9.80665
 FWI_WCS_URL = "https://cwfis.cfs.nrcan.gc.ca/geoserver/public/wcs"
 FWI_COVERAGE = "public:fwi"
-FWI_CACHE_DIR = Path("data/cwfis_fwi")
+FWI_CACHE_DIR = project_paths.data_path("cwfis_fwi")
 FWI_NATIVE_BBOX_3978 = (-2378164.081065, -707617.771124, 3039835.918935, 3854382.228876)
 FWI_CACHE_RESOLUTION_M = 5000.0
 FWI_MAX_DIMENSION = 900
@@ -99,7 +104,7 @@ TRANSMISSION_LINES_URL = (
     "https://delivery.maps.gov.bc.ca/arcgis/rest/services/whse/"
     "bcgw_pub_whse_basemapping/MapServer/77/query"
 )
-TRANSMISSION_LINES_CACHE = Path("data/bc_transmission_lines.geojson")
+TRANSMISSION_LINES_CACHE = project_paths.static_data_path("bc_transmission_lines.geojson")
 TRANSMISSION_LINES_PAGE_SIZE = 1000
 TRANSMISSION_LINES_COLOR = "#62676d"
 TRANSMISSION_LINES_WIDTH = 1.45
@@ -108,6 +113,29 @@ TRANSMISSION_LINES_HALO_COLOR = "#ffffff"
 TRANSMISSION_LINES_HALO_WIDTH = 2.55
 TRANSMISSION_LINES_HALO_ALPHA = 0.92
 _PROJECTED_TRANSMISSION_LINES: dict[int, tuple[BaseGeometry, ...]] = {}
+
+
+def prepare_peak_danger_for_plot(
+    peak_grid: fire_danger_peak.PeakDangerGrid,
+    lat: np.ndarray,
+    lon: np.ndarray,
+) -> fire_danger_peak.PeakDangerGrid:
+    """Classify spatially smoothed peak FWI/BUI without altering the raw cache."""
+
+    if any(field.shape != lat.shape for field in (lon, peak_grid.fwi, peak_grid.bui)):
+        raise ValueError("Peak-danger fields and coordinates must have matching shapes.")
+    # Local import avoids the danger-class module's existing plotting import cycle.
+    import make_experimental_danger_class as danger_base
+
+    regions = danger_base.danger_regions(lon, lat)
+    danger = danger_base.classify_smoothed_danger(
+        peak_grid.fwi,
+        peak_grid.bui,
+        regions,
+        sigma=sigma_for_km(fire_danger_peak.PEAK_DANGER_SMOOTHING_KM),
+    )
+    danger = np.where(np.isfinite(peak_grid.danger), danger, np.nan).astype(np.float32)
+    return replace(peak_grid, danger=danger)
 
 
 @dataclass(frozen=True)
@@ -129,6 +157,8 @@ BASE_DRY_LIGHTNING_MARKER_AREA = 9.0
 REGIONAL_DRY_LIGHTNING_MARKER_AREA = 14.0
 DRY_LIGHTNING_MARKER = (5, 2, 0)
 DRY_LIGHTNING_COLOR = "#161616"
+DRY_LIGHTNING_DISPLAY_THRESHOLD = 15.0
+DRY_LIGHTNING_MIN_LPI = 20.0
 LOW_RH_HATCH_COLOR = "#c3935f"
 VERY_LOW_RH_HATCH_COLOR = "#77451f"
 GOOD_RECOVERY_HATCH_COLOR = "#87cbdc"
@@ -152,6 +182,14 @@ def fire_weather_footer(fhour: int) -> str:
         "valid-time 10m RH crosshatch(brown 20-30%, dark <20%; blue 60-80%, dark blue >80%), "
         f"{period} dry lightning(black *), 3-h precip, BC transmission(grey)"
     )
+
+
+def lpi_display_smoothing_km(model_key: str | None = None) -> float:
+    key = model_key or model_config().key
+    try:
+        return LPI_DISPLAY_SMOOTHING_KM[key]
+    except KeyError as exc:
+        raise ValueError(f"Unsupported LPI display model: {key}") from exc
 
 
 def region_config(region_key: str) -> RegionConfig:
@@ -747,6 +785,7 @@ def compute_instantaneous_lightning_fields(
     lon: np.ndarray,
     terrain_m: np.ndarray,
     dcape_stride: int,
+    dry_lpi_gate: float = DRY_LIGHTNING_MIN_LPI,
 ) -> LightningFields:
     psfc_pa = crop(hour_file(run_dir, run, fhour, "PRES", "SFC", "0"), yslice, xslice)
     psfc_hpa = psfc_pa / 100.0
@@ -827,7 +866,7 @@ def compute_instantaneous_lightning_fields(
     dry_rh = np.minimum(surface_rh, subcloud_rh)
     dry_factor = ramp(55.0 - dry_rh, 0.0, 25.0) * (1.0 - ramp(precip_3h, 0.25, 2.5))
     # The LPI already includes the convective trigger; dry lightning should not be re-gated on pressure-level omega.
-    dry_potential = np.where(potential >= 25.0, potential * dry_factor, 0.0)
+    dry_potential = np.where(potential >= dry_lpi_gate, potential * dry_factor, 0.0)
 
     return LightningFields(
         potential=potential.astype(np.float32),
@@ -887,6 +926,7 @@ def compute_lightning_fields(
     terrain_m: np.ndarray,
     dcape_stride: int,
     snapshot_callback: Callable[[int, LightningFields], None] | None = None,
+    dry_lpi_gate: float = DRY_LIGHTNING_MIN_LPI,
 ) -> LightningFields:
     """Compute hourly diagnostics and aggregate hazards over the plotted three-hour window."""
     snapshot_hours = diagnostic_window_hours(fhour)
@@ -902,6 +942,7 @@ def compute_lightning_fields(
             lon,
             terrain_m,
             dcape_stride,
+            dry_lpi_gate=dry_lpi_gate,
         )
         if snapshot_callback is not None:
             snapshot_callback(snapshot_hour, snapshot)
@@ -918,7 +959,11 @@ def compute_lightning_fields(
         dry_rh = np.minimum(snapshot.surface_rh, snapshot.subcloud_rh)
         dry_rh_factor = ramp(55.0 - dry_rh, 0.0, 25.0)
         dry_candidates.append(
-            np.where(snapshot.potential >= 25.0, snapshot.potential * dry_rh_factor, 0.0)
+            np.where(
+                snapshot.potential >= dry_lpi_gate,
+                snapshot.potential * dry_rh_factor,
+                0.0,
+            )
         )
     dry_core = finite_window_max(dry_candidates)
     window_precip_factor = 1.0 - ramp(current.precip_3h, 0.25, 2.5)
@@ -1319,11 +1364,10 @@ def plot_lightning(
         warnings.simplefilter("ignore")
         if peak_danger_grid is not None:
             peak_danger = peak_danger_grid.danger[yslice, xslice]
-            peak_danger_s = smooth_nan(peak_danger, sigma=sigma_for_km(5.0))
             danger_ct = ax.contour(
                 plot_lon,
                 plot_lat,
-                peak_danger_s,
+                peak_danger,
                 levels=PEAK_DANGER_CONTOUR_LEVELS,
                 colors=PEAK_DANGER_CONTOUR_COLORS,
                 linewidths=PEAK_DANGER_CONTOUR_LINEWIDTHS,
@@ -1387,6 +1431,14 @@ def plot_lightning(
         fire_weather_footer(fhour),
         run,
         source_label="ECCC HRDPS + CWFIS",
+        source_text=(
+            f"Data:ECCC HRDPS + CWFIS | Wx init:{run.init_time:%Y%m%d%H}"
+            + (
+                f" | Danger init:{peak_danger_grid.source_init_utc:%Y%m%d%H}"
+                if peak_danger_grid is not None
+                else ""
+            )
+        ),
         header_y=0.998,
         source_x=0.999,
         source_y=0.998,
@@ -1508,6 +1560,8 @@ def make_region_plots(
             hourly_stride = max(1, int(round(ml_archive.MODEL_RESOLUTION_KM / model_config().resolution_km)))
 
             def archive_snapshot(snapshot_hour: int, snapshot: LightningFields) -> None:
+                if snapshot_hour not in ml_archive.hourly_lpi_forecast_hours(run.cycle):
+                    return
                 archived_hourly_paths.add(
                     ml_archive.archive_hourly_lpi_ingredients(
                         hourly_archive_root,
@@ -1569,14 +1623,16 @@ def make_region_plots(
             valid = run.init_time + dt.timedelta(hours=fhour)
             fire_date = fire_danger_peak.fire_date_for_valid(valid, plot_style.LOCAL_TZ)
             if fire_date not in peak_danger_by_date:
-                peak_danger_by_date[fire_date] = fire_danger_peak.load_peak_danger_for_display(
+                source = fire_danger_peak.load_peak_danger_for_display(
                     fwi_dir,
                     model_config().key,
                     fire_date,
                     run.init_time,
                     base_lat.shape,
                 )
-                source = peak_danger_by_date[fire_date]
+                if source is not None:
+                    source = prepare_peak_danger_for_plot(source, base_lat, base_lon)
+                peak_danger_by_date[fire_date] = source
                 if source is None:
                     log(f"  no qualified peak-daily fire-danger guidance for {fire_date:%Y-%m-%d}.")
                 else:
@@ -1596,7 +1652,20 @@ def make_region_plots(
                             f"{source.fire_date:%Y-%m-%d} from {source.source_run_stamp}; "
                             f"{fire_date:%Y-%m-%d} does not reach 17:00 local."
                         )
-            peak_danger_grid = peak_danger_by_date[fire_date]
+            cached_peak_danger = peak_danger_by_date[fire_date]
+            if cached_peak_danger is not None and fire_danger_peak.guidance_anchor_is_eligible_for_run(
+                cached_peak_danger,
+                run.init_time,
+            ):
+                peak_danger_grid = cached_peak_danger
+            elif cached_peak_danger is not None:
+                anchor_age = (
+                    run.init_time - cached_peak_danger.anchor_time_utc
+                ).total_seconds() / 3600.0
+                log(
+                    f"  CWFIS anchor was {anchor_age:.0f} h old at {run.stamp} initialization; "
+                    f"suppressing fire-danger guidance for this model run."
+                )
         for region in regions:
             if render_bc_twopanel and region.key == "bc":
                 continue

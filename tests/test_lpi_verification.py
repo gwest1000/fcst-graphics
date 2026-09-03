@@ -44,11 +44,43 @@ class LpiVerificationWindowTest(unittest.TestCase):
         self.assertEqual(timestamps[0], start + dt.timedelta(minutes=10))
         self.assertEqual(timestamps[-1], end)
 
+    def test_daily_aggregation_uses_model_specific_display_smoothing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            run = self.run_info("20260708T12Z")
+            window = verification.first_full_12z_window(run)
+            assert window is not None
+            paths = {}
+            for fhour in window.included_hours:
+                path = root / f"f{fhour:03d}.npz"
+                potential = np.zeros((9, 9), dtype=np.float32)
+                potential[4, 4] = 100.0
+                np.savez_compressed(
+                    path,
+                    version=np.asarray([3], dtype=np.int16),
+                    formula_version=np.asarray("test"),
+                    model_key=np.asarray("continental"),
+                    model_label=np.asarray("HRDPS 2.5 km"),
+                    source_label=np.asarray("ECCC"),
+                    run_stamp=np.asarray(run.stamp),
+                    init_iso=np.asarray(run.init_time.isoformat()),
+                    fhour=np.asarray([fhour], dtype=np.int16),
+                    window_fhours=np.asarray([fhour], dtype=np.int16),
+                    temporal_aggregation=np.asarray("three_hour_max"),
+                    lat=np.zeros((9, 9), dtype=np.float32),
+                    lon=np.zeros((9, 9), dtype=np.float32),
+                    potential=potential,
+                )
+                paths[fhour] = path
+
+            forecast = verification.aggregate_daily_lpi(paths, window)
+
+        self.assertIsNotNone(forecast)
+        assert forecast is not None
+        self.assertLess(forecast.potential[4, 4], 100.0)
+        self.assertGreater(forecast.potential[4, 3], 0.0)
+
     def test_expected_filename_uses_window_end_forecast_hour(self) -> None:
-        self.assertEqual(
-            verification.expected_verification_name("west", "20260708T12Z"),
-            "hrdps_west_lightning_verif_20260708T12Z_f024.png",
-        )
         self.assertEqual(
             verification.expected_verification_name("continental", "20260708T18Z"),
             "hrdps_continental_lightning_verif_20260708T18Z_f042.png",

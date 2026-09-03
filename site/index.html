@@ -535,19 +535,6 @@
           </li>
           <li class="category">
             <div class="category-title">Surface</div>
-            <button class="menu-button ptype" type="button" data-plot-toggle="wind">
-              <span class="chevron" aria-hidden="true"></span>
-              <span class="label">10 m Wind</span>
-            </button>
-            <div class="submenu" data-plot-panel="wind">
-              <button class="menu-button area" type="button" data-area-toggle="wind_south_coast">
-                <span class="chevron" aria-hidden="true"></span>
-                <span class="label">South Coast</span>
-              </button>
-              <div class="submenu" data-model-panel="wind_south_coast">
-                <button class="menu-button model" type="button" data-product-select="wind_south_coast">HRDPS-West 1 km</button>
-              </div>
-            </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="temperature">
               <span class="chevron" aria-hidden="true"></span>
               <span class="label">2 m Temperature</span>
@@ -559,20 +546,6 @@
               </button>
               <div class="submenu" data-model-panel="temperature_bc">
                 <button class="menu-button model" type="button" data-product-select="continental_temperature">HRDPS 2.5 km</button>
-              </div>
-              <button class="menu-button area" type="button" data-area-toggle="temperature_south">
-                <span class="chevron" aria-hidden="true"></span>
-                <span class="label">Southern BC</span>
-              </button>
-              <div class="submenu" data-model-panel="temperature_south">
-                <button class="menu-button model" type="button" data-product-select="temperature_south">HRDPS-West 1 km</button>
-              </div>
-              <button class="menu-button area" type="button" data-area-toggle="temperature_north">
-                <span class="chevron" aria-hidden="true"></span>
-                <span class="label">Northern BC</span>
-              </button>
-              <div class="submenu" data-model-panel="temperature_north">
-                <button class="menu-button model" type="button" data-product-select="temperature_north">HRDPS-West 1 km</button>
               </div>
             </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="lightning">
@@ -587,27 +560,6 @@
               <div class="submenu" data-model-panel="lightning_bc">
                 <button class="menu-button model" type="button" data-product-select="continental_lightning_twopanel">HRDPS 2.5 km</button>
               </div>
-              <button class="menu-button area" type="button" data-area-toggle="lightning_sw">
-                <span class="chevron" aria-hidden="true"></span>
-                <span class="label">Southwest BC</span>
-              </button>
-              <div class="submenu" data-model-panel="lightning_sw">
-                <button class="menu-button model" type="button" data-product-select="lightning_sw">HRDPS-West 1 km</button>
-              </div>
-              <button class="menu-button area" type="button" data-area-toggle="lightning_se">
-                <span class="chevron" aria-hidden="true"></span>
-                <span class="label">Southeast BC</span>
-              </button>
-              <div class="submenu" data-model-panel="lightning_se">
-                <button class="menu-button model" type="button" data-product-select="lightning_se">HRDPS-West 1 km</button>
-              </div>
-              <button class="menu-button area" type="button" data-area-toggle="lightning_ne">
-                <span class="chevron" aria-hidden="true"></span>
-                <span class="label">Northeast BC</span>
-              </button>
-              <div class="submenu" data-model-panel="lightning_ne">
-                <button class="menu-button model" type="button" data-product-select="lightning_ne">HRDPS-West 1 km</button>
-              </div>
             </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="fwi2025_danger">
               <span class="chevron" aria-hidden="true"></span>
@@ -619,7 +571,6 @@
                 <span class="label">BC</span>
               </button>
               <div class="submenu" data-model-panel="fwi2025_danger">
-                <button class="menu-button model" type="button" data-product-select="fwi2025_danger">HRDPS-West 1 km</button>
                 <button class="menu-button model" type="button" data-product-select="continental_fwi2025_danger">HRDPS 2.5 km</button>
               </div>
             </div>
@@ -652,7 +603,6 @@
                 <span class="label">BC</span>
               </button>
               <div class="submenu" data-model-panel="lightning_verif">
-                <button class="menu-button model" type="button" data-product-select="lightning_verif">HRDPS-West 1 km</button>
                 <button class="menu-button model" type="button" data-product-select="continental_lightning_verif">HRDPS 2.5 km</button>
               </div>
             </div>
@@ -777,50 +727,28 @@
         fourpanel: ["continental_fourpanel", "ecmwf_control_convective_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
         ecmwf_ensemble_spread: ["ecmwf_ensemble_spread_500"],
-        wind: ["wind_south_coast"],
-        lightning: [
-          "continental_lightning_twopanel",
-          "lightning_sw",
-          "lightning_se",
-          "lightning_ne",
-        ],
-        temperature: [
-          "continental_temperature",
-          "temperature_south",
-          "temperature_north",
-        ],
-        fwi2025_danger: ["fwi2025_danger", "continental_fwi2025_danger"],
-        lightning_verif: ["lightning_verif", "continental_lightning_verif"],
+        lightning: ["continental_lightning_twopanel"],
+        temperature: ["continental_temperature"],
+        fwi2025_danger: ["continental_fwi2025_danger"],
+        lightning_verif: ["continental_lightning_verif"],
         fire_danger_verif: ["fire_danger_verif"],
       };
       const areaGroups = {
         fourpanel: ["continental_fourpanel", "ecmwf_control_convective_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
         ecmwf_ensemble_spread: ["ecmwf_ensemble_spread_500"],
-        wind_south_coast: ["wind_south_coast"],
         lightning_bc: ["continental_lightning_twopanel"],
-        lightning_sw: ["lightning_sw"],
-        lightning_se: ["lightning_se"],
-        lightning_ne: ["lightning_ne"],
         temperature_bc: ["continental_temperature"],
-        temperature_south: ["temperature_south"],
-        temperature_north: ["temperature_north"],
-        fwi2025_danger: ["fwi2025_danger", "continental_fwi2025_danger"],
-        lightning_verif: ["lightning_verif", "continental_lightning_verif"],
+        fwi2025_danger: ["continental_fwi2025_danger"],
+        lightning_verif: ["continental_lightning_verif"],
         fire_danger_verif: ["fire_danger_verif"],
       };
       const areaPlotGroups = {
         fourpanel: "fourpanel",
         synoptic_fourpanel: "synoptic_fourpanel",
         ecmwf_ensemble_spread: "ecmwf_ensemble_spread",
-        wind_south_coast: "wind",
         lightning_bc: "lightning",
-        lightning_sw: "lightning",
-        lightning_se: "lightning",
-        lightning_ne: "lightning",
         temperature_bc: "temperature",
-        temperature_south: "temperature",
-        temperature_north: "temperature",
         fwi2025_danger: "fwi2025_danger",
         lightning_verif: "lightning_verif",
         fire_danger_verif: "fire_danger_verif",
@@ -905,18 +833,10 @@
         return (
           productFor(activeRun, activeProductKey) ||
           productFor(activeRun, "continental_lightning_twopanel") ||
-          productFor(activeRun, "wind_south_coast") ||
-          productFor(activeRun, "lightning_sw") ||
-          productFor(activeRun, "lightning_se") ||
-          productFor(activeRun, "lightning_ne") ||
           productFor(activeRun, "continental_temperature") ||
-          productFor(activeRun, "temperature_south") ||
-          productFor(activeRun, "temperature_north") ||
-          productFor(activeRun, "fwi2025_danger") ||
           productFor(activeRun, "continental_fwi2025_danger") ||
           productFor(activeRun, "fire_danger_verif") ||
           productFor(activeRun, "continental_lightning_verif") ||
-          productFor(activeRun, "lightning_verif") ||
           productFor(activeRun, "continental_fourpanel") ||
           productFor(activeRun, "ecmwf_control_convective_fourpanel") ||
           productFor(activeRun, "ecmwf_control_fourpanel") ||
@@ -1271,18 +1191,10 @@
         if (!productFor(activeRun, activeProductKey)) {
           const fallbackProduct = [
             "continental_lightning_twopanel",
-            "wind_south_coast",
-            "lightning_sw",
-            "lightning_se",
-            "lightning_ne",
             "continental_temperature",
-            "temperature_south",
-            "temperature_north",
-            "fwi2025_danger",
             "continental_fwi2025_danger",
             "fire_danger_verif",
             "continental_lightning_verif",
-            "lightning_verif",
             "continental_fourpanel",
             "ecmwf_control_convective_fourpanel",
             "ecmwf_control_fourpanel",

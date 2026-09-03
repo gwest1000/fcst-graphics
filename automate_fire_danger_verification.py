@@ -8,21 +8,24 @@ import datetime as dt
 import fcntl
 import json
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Iterable
 
 import fire_danger_verification as verification
 import plot_style
+import project_paths
 from publish_hrdps_west import DEFAULT_PAGES_REPO, PRODUCTS, minimum_manifest_hours, publish
 
 
-DEFAULT_OUTPUT_DIR = Path("plots/fire_danger_verification")
+DEFAULT_OUTPUT_DIR = project_paths.plot_path("fire_danger_verification")
 LOCK_PATH = Path("logs/fire_danger_verification.lock")
 STATE_PATH = Path("logs/state/fire_danger_verification.status.json")
 RUN_STAMP_RE = re.compile(r"^\d{8}T(?:00|06|12|18)Z$")
-DEFAULT_FORECAST_DIRS = (Path("plots/experimental_fwi2025_danger"),)
+DEFAULT_FORECAST_DIRS = (project_paths.plot_path("experimental_fwi2025_danger"),)
 DEFAULT_FORECAST_PRODUCT = "continental_fwi2025_danger"
+LOCAL_PLOT_KEEP_DAYS = 14
 
 
 def _latest_mtime_ns(paths: Iterable[Path]) -> int:
@@ -62,6 +65,26 @@ def save_state(path: Path, signature: dict[str, object]) -> None:
     tmp_path = path.with_suffix(path.suffix + ".tmp")
     tmp_path.write_text(json.dumps(signature, indent=2, sort_keys=True) + "\n")
     tmp_path.replace(path)
+
+
+def prune_local_plots(
+    output_dir: Path,
+    keep_days: int = LOCAL_PLOT_KEEP_DAYS,
+    now: dt.datetime | None = None,
+) -> list[Path]:
+    if not output_dir.exists():
+        return []
+    now = now or dt.datetime.now(dt.timezone.utc)
+    cutoff = now - dt.timedelta(days=keep_days)
+    removed: list[Path] = []
+    for child in output_dir.iterdir():
+        if not child.is_dir() or not RUN_STAMP_RE.match(child.name):
+            continue
+        init = dt.datetime.strptime(child.name, "%Y%m%dT%HZ").replace(tzinfo=dt.timezone.utc)
+        if init < cutoff:
+            shutil.rmtree(child)
+            removed.append(child)
+    return removed
 
 
 def latest_run_stamp(pages_repo: Path) -> str:
@@ -130,6 +153,7 @@ def main(argv: Iterable[str]) -> int:
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return 0
+        prune_local_plots(args.output_dir)
         stamp = args.stamp or (
             latest_local_run_stamp() if args.no_publish else latest_run_stamp(args.pages_repo)
         )

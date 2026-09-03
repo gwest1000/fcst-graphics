@@ -94,6 +94,7 @@ class ModelArchiveTest(unittest.TestCase):
         args = archive.parse_args(["archive-baseline", "--run", "20260711T00Z"])
         self.assertEqual(args.command, "archive-baseline")
         self.assertEqual(args.cache_dir, archive.DEFAULT_LPI_CACHE_DIR)
+        self.assertEqual(args.model, "continental")
 
     def test_only_twice_daily_continental_runs_are_eligible(self) -> None:
         self.assertTrue(archive.should_archive_model_run("continental", "00"))
@@ -103,6 +104,22 @@ class ModelArchiveTest(unittest.TestCase):
         for cycle in ("00", "06", "12", "18"):
             self.assertTrue(archive.should_archive_hourly_lpi_run("continental", cycle))
         self.assertFalse(archive.should_archive_hourly_lpi_run("west", "12"))
+        for cycle in ("00", "06", "12", "18"):
+            self.assertTrue(archive.should_archive_lpi_baseline_run("continental", cycle))
+            self.assertFalse(archive.should_archive_lpi_baseline_run("west", cycle))
+
+    def test_archive_windows_cover_first_complete_12z_to_12z_day(self) -> None:
+        self.assertEqual(archive.model_forecast_hours("00"), tuple(range(15, 37, 3)))
+        self.assertEqual(archive.model_forecast_hours("12"), tuple(range(3, 25, 3)))
+        self.assertEqual(archive.model_forecast_hours("06"), ())
+        self.assertEqual(archive.hourly_lpi_forecast_hours("00"), tuple(range(13, 37)))
+        self.assertEqual(archive.hourly_lpi_forecast_hours("06"), tuple(range(7, 31)))
+        self.assertEqual(archive.hourly_lpi_forecast_hours("12"), tuple(range(1, 25)))
+        self.assertEqual(archive.hourly_lpi_forecast_hours("18"), tuple(range(19, 43)))
+
+    def test_west_baseline_archive_is_decommissioned(self) -> None:
+        self.assertFalse(archive.should_archive_lpi_baseline_run("west", "00"))
+        self.assertFalse(archive.should_archive_lpi_baseline_run("west", "12"))
 
     def test_pack_round_trip_and_missing_value(self) -> None:
         spec = archive.FieldSpec("temperature", "TMP", "Sfc", "K", 273.15, 0.05)
@@ -112,6 +129,20 @@ class ModelArchiveTest(unittest.TestCase):
         self.assertEqual(clipped, 0)
         np.testing.assert_allclose(actual[:3], source[:3], atol=0.026)
         self.assertTrue(np.isnan(actual[3]))
+
+    def test_pack_masks_values_outside_archive_domain(self) -> None:
+        spec = archive.FieldSpec("temperature", "TMP", "Sfc", "K", 273.15, 0.05)
+        source = np.asarray([[273.15, 274.15], [275.15, 276.15]], dtype=np.float32)
+        domain_mask = np.asarray([[True, False], [False, True]])
+        packed, clipped = archive._pack_field(source, spec, domain_mask)
+        self.assertEqual(clipped, 0)
+        self.assertEqual(packed[0, 1], archive.FILL_VALUE)
+        self.assertEqual(packed[1, 0], archive.FILL_VALUE)
+        np.testing.assert_allclose(
+            archive.unpack_field(packed, spec)[domain_mask],
+            source[domain_mask],
+            atol=0.026,
+        )
 
     def test_f000_excludes_precipitation_fields(self) -> None:
         keys = {spec.key for spec in archive.model_field_specs(0)}
@@ -157,7 +188,7 @@ class ModelArchiveTest(unittest.TestCase):
             output = archive.archive_hourly_lpi_ingredients(
                 root,
                 run,
-                1,
+                7,
                 lat,
                 lon,
                 fields,
@@ -170,11 +201,11 @@ class ModelArchiveTest(unittest.TestCase):
             self.assertEqual(sidecar["shape"], [2, 2])
             self.assertEqual(sidecar["formula_version"], "test_formula")
             with np.load(output) as packed:
-                self.assertEqual(int(packed["forecast_hour"][0]), 1)
+                self.assertEqual(int(packed["forecast_hour"][0]), 7)
                 self.assertEqual(str(packed["formula_version"].item()), "test_formula")
                 self.assertEqual(packed["mu_li"].shape, (2, 2))
             manifest = json.loads((output.parent / "manifest.json").read_text())
-            self.assertEqual(manifest["archived_hours"], [1])
+            self.assertEqual(manifest["archived_hours"], [7])
             self.assertFalse(manifest["complete"])
 
     def test_hourly_precipitation_rate_range_covers_extreme_convection(self) -> None:

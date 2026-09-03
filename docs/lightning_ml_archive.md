@@ -6,25 +6,27 @@ This archive preserves the forecast and observation data needed to evaluate and 
 
 The proposed predictand is occurrence of at least one observed lightning flash within 30 km during the three-hour period ending at the forecast-panel valid time. The archive retains undilated three-hour flash density, so other radii and thresholds can be tested without rebuilding the observation history.
 
-F003 through F048 map cleanly to trailing three-hour blocks. F000 is archived as an environmental analysis but should not be treated as a three-hour forecast sample.
+The calibration sample uses the first complete operational day available from each run: eight trailing three-hour blocks ending 15Z through 12Z. This keeps all cycles on the same verification window without retaining a second, heavily overlapping forecast day.
 
 ## Archive Root
 
 Default location:
 
 ```text
-/Volumes/Greg1_2tb/concrete_fcst_data/derived/lightning_ml
+${PROJECT_DATA_ROOT}/fcstGraphics/data/lightning_ml
 ```
 
-Set `LIGHTNING_ML_ARCHIVE_ROOT` or use the command-line archive-root option to override it.
+Set `LIGHTNING_ML_ARCHIVE_ROOT` or use the command-line archive-root option to
+override it. `PROJECT_DATA_ROOT` is normally read from
+`~/.config/project-data.env`.
 
 The root contains:
 
 ```text
 observations/eccc_lightning_3h/schema_v1/
-model/hrdps_continental_5km/schema_v1/
+model/hrdps_continental_5km/schema_v2/
 baseline/hrdps_continental_lpi_5km/schema_v1/
-hourly/hrdps_continental_lpi_ingredients_5km/schema_v1/
+hourly/hrdps_continental_lpi_ingredients_5km/schema_v2/
 status.json
 ```
 
@@ -38,7 +40,7 @@ The LPI verification job reads three-hour aggregates first and falls back to ten
 
 ## HRDPS Predictors
 
-Only continental 00Z and 12Z runs are archived. Fields are cropped to the existing BC plotting domain, sampled at 5 km, packed to fixed-precision int16 values, and compressed into one NPZ per forecast hour.
+Only continental 00Z and 12Z runs are archived. The 00Z archive retains F015-F036 every three hours; the 12Z archive retains F003-F024 every three hours. Fields are limited to BC plus a 50 km buffer, sampled at 5 km, packed to fixed-precision int16 values, and compressed into one NPZ per retained forecast hour. The buffer exceeds the current 30 km occurrence-target radius and preserves nearby lightning needed at the BC boundary.
 
 The schema includes:
 
@@ -50,13 +52,18 @@ The schema includes:
 - PBL height, storm-relative helicity, precipitation rate and accumulation;
 - column cloud water, total cloud cover, 500 hPa height and absolute vorticity.
 
-Static latitude, longitude and terrain are stored once. A grid hash prevents incompatible grids from being mixed. Every forecast-hour sidecar records source filenames, clipping counts, a checksum and valid time. A run is complete only when all 17 hours and its manifest are present.
+Static latitude, longitude, the domain mask and terrain are stored once. A grid hash prevents incompatible grids from being mixed. Every forecast-hour sidecar records source filenames, clipping counts, a checksum and valid time. A run is complete only when all eight cycle-specific hours and its manifest are present.
 
 The handmade LPI is archived separately at 0.5-point precision with its formula version. This supports direct evaluation of later formula changes against the forecast that was actually issued.
 
+Issued HRDPS Continental LPI fields are retained at 5 km verification sampling
+with a static coordinate grid. Full hourly ingredients and pressure-profile
+predictors are also retained for calibration and training. The retired
+HRDPS-West 1 km baseline archive was removed in September 2026.
+
 ## Hourly LPI Ingredients
 
-All four continental cycles (00Z, 06Z, 12Z and 18Z) retain compact instantaneous ingredients at 5 km for every hour from F000 through F048. The archive stores MU-LI, CAPE, charging-layer RH and weighted depth, midlevel RH, resolved upward velocity, trailing-three-hour precipitation, precipitation rate, trigger, surface/subcloud RH and the instantaneous issued-formula LPI.
+All four continental cycles (00Z, 06Z, 12Z and 18Z) retain compact instantaneous ingredients at 5 km for the 24 hourly snapshots needed by their first complete 12Z-to-12Z operational day. The retained windows are F013-F036, F007-F030, F001-F024 and F019-F042, respectively. As with the raw predictors, values outside BC plus 50 km are replaced by the packed fill value before compression. The archive stores MU-LI, CAPE, charging-layer RH and weighted depth, midlevel RH, resolved upward velocity, trailing-three-hour precipitation, precipitation rate, trigger, surface/subcloud RH and the instantaneous issued-formula LPI.
 
 These fields preserve the hourly detail used by each plotted three-hour maximum without duplicating the much larger pressure-profile archive. On the archived 5 km grid they support faithful tests of LI/CAPE weighting, charging-RH/depth ramps, updraft and precipitation trigger thresholds, dry-lightning humidity treatment and probabilistic calibration. More fundamental changes to the charging-layer temperature definition still use the broader 00Z/12Z profile archive at its three-hour snapshots.
 
@@ -90,7 +97,7 @@ Retained handmade-LPI cache files can be backfilled with:
 
 After at least three weeks of convective-season observations, evaluate the handmade LPI before fitting ML:
 
-1. Match each F003-F048 forecast to its trailing three-hour observed-density block.
+1. Match the eight retained three-hour forecasts in each run to their observed-density blocks ending 15Z through 12Z.
 2. Create the binary 30 km occurrence target from the undilated density grids.
 3. Measure event frequency and reliability by LPI bin, forecast lead and local time.
 4. Compare current LPI components for hits, misses and false alarms.

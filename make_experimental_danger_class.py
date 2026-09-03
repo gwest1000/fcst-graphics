@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import functools
 import json
 import math
 import os
@@ -37,6 +38,7 @@ from shapely.ops import unary_union
 
 import make_hrdps_west_convective as hrdps
 import plot_style
+import project_paths
 from make_hrdps_west_lightning import (
     DATA_CRS,
     FWI_CACHE_DIR,
@@ -54,7 +56,7 @@ from make_hrdps_west_lightning import (
 
 
 DANGER_EXTENT = hrdps.MODEL_CONFIGS["west"].extent
-DANGER_REGION_CACHE = Path("data/bc_danger_regions/natural_resource_districts.geojson")
+DANGER_REGION_CACHE = project_paths.static_data_path("bc_danger_regions", "natural_resource_districts.geojson")
 NR_DISTRICT_WFS_URL = "https://openmaps.gov.bc.ca/geo/pub/WHSE_ADMIN_BOUNDARIES.ADM_NR_DISTRICTS_SPG/ows"
 NR_DISTRICT_LAYER = "pub:WHSE_ADMIN_BOUNDARIES.ADM_NR_DISTRICTS_SPG"
 CWFIS_COVERAGES = {
@@ -71,6 +73,8 @@ CWFIS_VALUE_LIMITS = {
     "fwi": (0.0, 500.0),
     "bui": (0.0, 1000.0),
 }
+CWFIS_REFERENCE_LOOKBACK = 14
+CWFIS_MIN_VALID_RETENTION = 0.95
 
 
 @dataclass(frozen=True)
@@ -229,6 +233,88 @@ def cwfis_cache_path(cache_dir: Path, name: str, valid_date: dt.date, extent: tu
     return cache_dir / name / f"{valid_date:%Y%m%d}" / f"cwfis_{name}_{valid_date:%Y%m%d}_{domain}.tif"
 
 
+def cwfis_valid_mask(
+    path: Path,
+    name: str,
+    *,
+    analysis_domain_only: bool = False,
+) -> np.ndarray:
+    """Return finite, physically plausible CWFIS cells from a cached GeoTIFF."""
+
+    with Image.open(path) as image:
+        data = np.asarray(image, dtype=np.float32)
+        nodata_tag = image.tag_v2.get(42113)
+        if analysis_domain_only:
+            lon, lat = geotiff_projected_lon_lat(image)
+    valid = np.isfinite(data)
+    if nodata_tag is not None:
+        valid &= data != float(nodata_tag)
+    lower, upper = CWFIS_VALUE_LIMITS[name]
+    valid &= (data >= lower) & (data <= upper)
+    if analysis_domain_only:
+        valid &= contains_xy(load_bc_geometry(), lon, lat)
+    return valid
+
+
+def validate_cwfis_coverage(
+    valid: np.ndarray,
+    reference_valid: np.ndarray,
+    *,
+    minimum_retention: float = CWFIS_MIN_VALID_RETENTION,
+) -> None:
+    """Reject an analysis that drops a large part of the normal data footprint."""
+
+    if valid.shape != reference_valid.shape:
+        raise ValueError("CWFIS coverage masks must have matching shapes.")
+    reference_count = int(np.count_nonzero(reference_valid))
+    if reference_count == 0:
+        return
+    retained = int(np.count_nonzero(valid & reference_valid)) / reference_count
+    if retained < minimum_retention:
+        raise RuntimeError(
+            f"CWFIS BC valid-data footprint retained only {retained:.1%} of recent "
+            f"BC coverage (minimum {minimum_retention:.0%})."
+        )
+
+
+def cwfis_reference_mask(dest: Path, name: str, valid_date: dt.date) -> np.ndarray | None:
+    """Load the largest recent valid footprint for this field and exact domain."""
+
+    prefix = f"cwfis_{name}_{valid_date:%Y%m%d}_"
+    if not dest.name.startswith(prefix):
+        return None
+    domain_suffix = dest.name[len(prefix) :]
+    candidates: list[tuple[int, np.ndarray]] = []
+    for date_dir in sorted(dest.parent.parent.iterdir(), reverse=True):
+        if not date_dir.is_dir() or not date_dir.name.isdigit() or date_dir.name >= f"{valid_date:%Y%m%d}":
+            continue
+        candidate = date_dir / f"cwfis_{name}_{date_dir.name}_{domain_suffix}"
+        if not candidate.exists():
+            continue
+        try:
+            # The resulting danger product is clipped to BC. Surrounding U.S. and
+            # provincial coverage can change independently and must not invalidate it.
+            mask = cwfis_valid_mask(candidate, name, analysis_domain_only=True)
+        except (OSError, ValueError):
+            continue
+        candidates.append((int(np.count_nonzero(mask)), mask))
+        if len(candidates) >= CWFIS_REFERENCE_LOOKBACK:
+            break
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: item[0])[1]
+
+
+def validate_cwfis_geotiff(path: Path, name: str, reference_valid: np.ndarray | None) -> None:
+    valid = cwfis_valid_mask(path, name)
+    if not np.any(valid):
+        raise RuntimeError(f"CWFIS {name.upper()} GeoTIFF contains no valid values.")
+    if reference_valid is not None:
+        analysis_valid = cwfis_valid_mask(path, name, analysis_domain_only=True)
+        if reference_valid.shape == analysis_valid.shape:
+            validate_cwfis_coverage(analysis_valid, reference_valid)
+
+
 def fetch_cwfis_geotiff(
     name: str,
     coverage: str,
@@ -237,8 +323,14 @@ def fetch_cwfis_geotiff(
     extent: tuple[float, float, float, float],
 ) -> Path:
     dest = cwfis_cache_path(cache_dir, name, valid_date, extent)
+    reference_valid = cwfis_reference_mask(dest, name, valid_date) if dest.parent.parent.exists() else None
     if dest.exists() and dest.stat().st_size > 0:
-        return dest
+        try:
+            validate_cwfis_geotiff(dest, name, reference_valid)
+            return dest
+        except (OSError, RuntimeError, ValueError) as exc:
+            log(f"Discarding incomplete CWFIS cache {dest}: {exc}")
+            dest.unlink(missing_ok=True)
 
     bbox = cwfis_bbox_3978(extent)
     width, height = cwfis_dimensions(bbox)
@@ -262,6 +354,7 @@ def fetch_cwfis_geotiff(
         tmp_path.write_bytes(response.content)
         with Image.open(tmp_path) as image:
             image.verify()
+        validate_cwfis_geotiff(tmp_path, name, reference_valid)
         tmp_path.replace(dest)
     finally:
         tmp_path.unlink(missing_ok=True)
@@ -377,6 +470,24 @@ def classify_danger(fwi: np.ndarray, bui: np.ndarray, regions: np.ndarray) -> np
     return out
 
 
+def classify_smoothed_danger(
+    fwi: np.ndarray,
+    bui: np.ndarray,
+    regions: np.ndarray,
+    sigma: float,
+) -> np.ndarray:
+    """Spatially smooth continuous indices before applying Schedule 2 classes."""
+
+    if fwi.shape != bui.shape or fwi.shape != regions.shape:
+        raise ValueError("FWI, BUI, and danger regions must have matching shapes.")
+    if sigma <= 0.0:
+        return classify_danger(fwi, bui, regions)
+    smoothed_fwi = hrdps.smooth_nan(fwi, sigma=sigma)
+    smoothed_bui = hrdps.smooth_nan(bui, sigma=sigma)
+    return classify_danger(smoothed_fwi, smoothed_bui, regions)
+
+
+@functools.lru_cache(maxsize=1)
 def load_bc_geometry():
     path = shapereader.natural_earth(
         resolution="10m",
@@ -555,7 +666,7 @@ def parse_date(text: str | None) -> dt.date:
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--date", default=None, help="CWFIS date YYYY-MM-DD. Defaults to today's local date.")
-    parser.add_argument("--output-dir", type=Path, default=Path("plots/experimental_danger_class"))
+    parser.add_argument("--output-dir", type=Path, default=project_paths.plot_path("experimental_danger_class"))
     parser.add_argument("--cache-dir", type=Path, default=FWI_CACHE_DIR)
     parser.add_argument("--watershed-cache", type=Path, default=hrdps.WATERSHED_CACHE)
     parser.add_argument("--refresh-watersheds", action="store_true")

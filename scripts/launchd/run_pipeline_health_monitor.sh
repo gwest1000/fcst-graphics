@@ -12,4 +12,4 @@ TELEGRAM_ENV="${FCST_TELEGRAM_ENV_FILE:-/Users/greg/projects/facebook-marketplac
 [[ -f "${TELEGRAM_ENV}" ]] && source "${TELEGRAM_ENV}"
 set +a
 
-exec "${REPO_ROOT}/.venv/bin/python" "${REPO_ROOT}/monitor_pipeline_health.py" "$@"
+exec "${REPO_ROOT}/.venv/bin/python" "${REPO_ROOT}/monitor_pipeline_health.py" --operational "$@"

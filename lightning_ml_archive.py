@@ -16,16 +16,33 @@ from typing import Iterable
 
 import numpy as np
 from PIL import Image, TiffImagePlugin
+from pyproj import Transformer
+from shapely import contains_xy
+from shapely.ops import transform
 
 import make_hrdps_west_convective as hrdps
+import project_paths
+from make_experimental_danger_class import load_bc_geometry
 
-ARCHIVE_SCHEMA_VERSION = 1
+OBSERVATION_SCHEMA_VERSION = 1
+MODEL_ARCHIVE_SCHEMA_VERSION = 2
+BASELINE_SCHEMA_VERSION = 1
 MODEL_ARCHIVE_CYCLES = frozenset({"00", "12"})
-MODEL_FORECAST_HOURS = tuple(range(0, 49, 3))
+MODEL_FORECAST_HOURS_BY_CYCLE = {
+    "00": tuple(range(15, 37, 3)),
+    "12": tuple(range(3, 25, 3)),
+}
+BASELINE_FORECAST_HOURS = tuple(range(0, 49, 3))
 MODEL_RESOLUTION_KM = 5.0
-HOURLY_LPI_SCHEMA_VERSION = 1
+ARCHIVE_DOMAIN_BUFFER_KM = 50.0
+HOURLY_LPI_SCHEMA_VERSION = 2
 HOURLY_LPI_ARCHIVE_CYCLES = frozenset({"00", "06", "12", "18"})
-HOURLY_LPI_FORECAST_HOURS = tuple(range(0, 49))
+HOURLY_LPI_FORECAST_HOURS_BY_CYCLE = {
+    "00": tuple(range(13, 37)),
+    "06": tuple(range(7, 31)),
+    "12": tuple(range(1, 25)),
+    "18": tuple(range(19, 43)),
+}
 OBS_BLOCK_HOURS = 3
 OBS_SOURCE_MINUTES = 10
 OBS_SOURCES_PER_BLOCK = OBS_BLOCK_HOURS * 60 // OBS_SOURCE_MINUTES
@@ -33,12 +50,12 @@ OBS_RE = re.compile(r"(?P<stamp>\d{8}T\d{4}Z)_MSC_Lightning_2\.5km\.tif$")
 DEFAULT_ARCHIVE_ROOT = Path(
     os.environ.get(
         "LIGHTNING_ML_ARCHIVE_ROOT",
-        "/Volumes/Greg1_2tb/concrete_fcst_data/derived/lightning_ml",
+        project_paths.data_path("lightning_ml"),
     )
 )
-DEFAULT_OBS_DIR = Path("data/lightning_obs")
-DEFAULT_MODEL_DATA_DIR = Path("data/hrdps_continental")
-DEFAULT_LPI_CACHE_DIR = Path("plots/hrdps_continental_lightning")
+DEFAULT_OBS_DIR = project_paths.data_path("lightning_obs")
+DEFAULT_MODEL_DATA_DIR = project_paths.data_path("hrdps_continental")
+DEFAULT_LPI_CACHE_DIR = project_paths.plot_path("hrdps_continental_lightning")
 FILL_VALUE = np.int16(-32768)
 PROFILE_LEVELS_HPA = (
     1000,
@@ -205,19 +222,21 @@ def verify_archive_writable(root: Path) -> Path:
 
 
 def observation_archive_dir(root: Path) -> Path:
-    return root / "observations" / "eccc_lightning_3h" / f"schema_v{ARCHIVE_SCHEMA_VERSION}"
+    return root / "observations" / "eccc_lightning_3h" / f"schema_v{OBSERVATION_SCHEMA_VERSION}"
 
 
-def model_archive_dir(root: Path) -> Path:
-    return root / "model" / "hrdps_continental_5km" / f"schema_v{ARCHIVE_SCHEMA_VERSION}"
+def model_archive_dir(root: Path, schema_version: int = MODEL_ARCHIVE_SCHEMA_VERSION) -> Path:
+    return root / "model" / "hrdps_continental_5km" / f"schema_v{schema_version}"
 
 
-def baseline_archive_dir(root: Path) -> Path:
-    return root / "baseline" / "hrdps_continental_lpi_5km" / f"schema_v{ARCHIVE_SCHEMA_VERSION}"
+def baseline_archive_dir(root: Path, model_key: str = "continental") -> Path:
+    if model_key not in hrdps.MODEL_CONFIGS:
+        raise ValueError(f"Unsupported LPI baseline model: {model_key}")
+    return root / "baseline" / f"hrdps_{model_key}_lpi_5km" / f"schema_v{BASELINE_SCHEMA_VERSION}"
 
 
-def hourly_lpi_archive_dir(root: Path) -> Path:
-    return root / "hourly" / "hrdps_continental_lpi_ingredients_5km" / f"schema_v{HOURLY_LPI_SCHEMA_VERSION}"
+def hourly_lpi_archive_dir(root: Path, schema_version: int = HOURLY_LPI_SCHEMA_VERSION) -> Path:
+    return root / "hourly" / "hrdps_continental_lpi_ingredients_5km" / f"schema_v{schema_version}"
 
 
 def parse_obs_time(path_or_name: str | Path) -> dt.datetime | None:
@@ -352,7 +371,7 @@ def aggregate_observation_block(
 
     finite = aggregate != -999.0
     payload = {
-        "schema_version": ARCHIVE_SCHEMA_VERSION,
+        "schema_version": OBSERVATION_SCHEMA_VERSION,
         "window_start_utc": utc_iso(end - dt.timedelta(hours=OBS_BLOCK_HOURS)),
         "window_end_utc": utc_iso(end),
         "source_interval_minutes": OBS_SOURCE_MINUTES,
@@ -404,6 +423,20 @@ def should_archive_hourly_lpi_run(model_key: str, cycle: str) -> bool:
     return model_key == "continental" and cycle in HOURLY_LPI_ARCHIVE_CYCLES
 
 
+def should_archive_lpi_baseline_run(model_key: str, cycle: str) -> bool:
+    """Retain issued LPI fields for the operational Continental HRDPS."""
+
+    return model_key == "continental" and cycle in hrdps.MODEL_CONFIGS["continental"].cycles
+
+
+def model_forecast_hours(cycle: str) -> tuple[int, ...]:
+    return MODEL_FORECAST_HOURS_BY_CYCLE.get(cycle, ())
+
+
+def hourly_lpi_forecast_hours(cycle: str) -> tuple[int, ...]:
+    return HOURLY_LPI_FORECAST_HOURS_BY_CYCLE.get(cycle, ())
+
+
 def model_source_filename(spec: FieldSpec, stamp: str, fhour: int) -> str:
     return f"{stamp}_MSC_HRDPS_{spec.variable}_{spec.level_tag}_RLatLon0.0225_PT{fhour:03d}H.grib2"
 
@@ -416,9 +449,17 @@ def required_model_names(stamp: str, fhour: int) -> tuple[str, ...]:
     return tuple(model_source_filename(spec, stamp, fhour) for spec in model_field_specs(fhour))
 
 
-def _pack_field(data: np.ndarray, spec: FieldSpec) -> tuple[np.ndarray, int]:
+def _pack_field(
+    data: np.ndarray,
+    spec: FieldSpec | HourlyIngredientSpec,
+    domain_mask: np.ndarray | None = None,
+) -> tuple[np.ndarray, int]:
     output = np.full(data.shape, FILL_VALUE, dtype=np.int16)
     valid = np.isfinite(data)
+    if domain_mask is not None:
+        if domain_mask.shape != data.shape:
+            raise ValueError(f"Archive domain mask has shape {domain_mask.shape}; expected {data.shape}.")
+        valid &= domain_mask
     if not np.any(valid):
         return output, 0
     scaled = np.rint((data[valid] - spec.offset) / spec.scale)
@@ -438,14 +479,28 @@ def _grid_hash(lat: np.ndarray, lon: np.ndarray) -> str:
     return digest.hexdigest()
 
 
+def archive_domain_mask(lat: np.ndarray, lon: np.ndarray) -> np.ndarray:
+    """Keep BC and a border buffer needed by the 30-km verification target."""
+
+    to_bc = Transformer.from_crs("EPSG:4326", "EPSG:3005", always_xy=True)
+    from_bc = Transformer.from_crs("EPSG:3005", "EPSG:4326", always_xy=True)
+    bc = transform(to_bc.transform, load_bc_geometry())
+    buffered = transform(from_bc.transform, bc.buffer(ARCHIVE_DOMAIN_BUFFER_KM * 1000.0))
+    return np.asarray(contains_xy(buffered, lon, lat), dtype=bool)
+
+
 def _write_model_schema(root: Path) -> None:
     path = model_archive_dir(root) / "schema.json"
     payload = {
-        "schema_version": ARCHIVE_SCHEMA_VERSION,
+        "schema_version": MODEL_ARCHIVE_SCHEMA_VERSION,
         "model": "ECCC HRDPS continental 2.5 km",
         "archived_grid_resolution_km": MODEL_RESOLUTION_KM,
         "eligible_cycles_utc": sorted(MODEL_ARCHIVE_CYCLES),
-        "forecast_hours": list(MODEL_FORECAST_HOURS),
+        "forecast_hours_by_cycle": {
+            cycle: list(hours) for cycle, hours in MODEL_FORECAST_HOURS_BY_CYCLE.items()
+        },
+        "archive_domain": "British Columbia plus buffer",
+        "archive_domain_buffer_km": ARCHIVE_DOMAIN_BUFFER_KM,
         "fill_value": int(FILL_VALUE),
         "packing_formula": "physical_value = packed_int16 * scale + offset",
         "fields": [asdict(spec) for spec in MODEL_FIELD_SPECS],
@@ -458,32 +513,38 @@ def _write_model_schema(root: Path) -> None:
     write_json_atomic(path, payload)
 
 
-def _ensure_grid_archive(root: Path, lat: np.ndarray, lon: np.ndarray) -> str:
+def _ensure_grid_archive(root: Path, lat: np.ndarray, lon: np.ndarray) -> tuple[str, np.ndarray]:
     static_dir = model_archive_dir(root) / "static"
     path = static_dir / "grid.npz"
     grid_hash = _grid_hash(lat, lon)
     if path.exists():
         with np.load(path) as archived:
             archived_hash = str(archived["grid_hash"].item())
+            domain_mask = archived["domain_mask"].astype(bool)
         if archived_hash != grid_hash:
             raise RuntimeError(f"HRDPS archive grid changed: {archived_hash} != {grid_hash}.")
-        return grid_hash
+        if domain_mask.shape != lat.shape:
+            raise RuntimeError(f"HRDPS archive mask has shape {domain_mask.shape}; expected {lat.shape}.")
+        return grid_hash, domain_mask
 
+    domain_mask = archive_domain_mask(lat, lon)
     static_dir.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     try:
         with tmp_path.open("wb") as handle:
             np.savez_compressed(
                 handle,
-                schema_version=np.asarray([ARCHIVE_SCHEMA_VERSION], dtype=np.int16),
+                schema_version=np.asarray([MODEL_ARCHIVE_SCHEMA_VERSION], dtype=np.int16),
                 grid_hash=np.asarray(grid_hash),
                 lat=lat.astype(np.float32, copy=False),
                 lon=lon.astype(np.float32, copy=False),
+                domain_mask=domain_mask.astype(np.uint8),
+                domain_buffer_km=np.asarray([ARCHIVE_DOMAIN_BUFFER_KM], dtype=np.float32),
             )
         tmp_path.replace(path)
     finally:
         tmp_path.unlink(missing_ok=True)
-    return grid_hash
+    return grid_hash, domain_mask
 
 
 def _ensure_terrain_archive(
@@ -494,6 +555,7 @@ def _ensure_terrain_archive(
     xslice: slice,
     stride: int,
     grid_hash: str,
+    domain_mask: np.ndarray,
 ) -> None:
     path = model_archive_dir(root) / "static" / "terrain.npz"
     if path.exists():
@@ -504,14 +566,14 @@ def _ensure_terrain_archive(
     terrain, _, _ = hrdps.read_grib(source)
     sample = terrain[yslice, xslice][::stride, ::stride]
     packed = np.full(sample.shape, FILL_VALUE, dtype=np.int16)
-    valid = np.isfinite(sample)
+    valid = np.isfinite(sample) & domain_mask
     packed[valid] = np.clip(np.rint(sample[valid]), -32767.0, 32767.0).astype(np.int16)
     tmp_path = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     try:
         with tmp_path.open("wb") as handle:
             np.savez_compressed(
                 handle,
-                schema_version=np.asarray([ARCHIVE_SCHEMA_VERSION], dtype=np.int16),
+                schema_version=np.asarray([MODEL_ARCHIVE_SCHEMA_VERSION], dtype=np.int16),
                 grid_hash=np.asarray(grid_hash),
                 elevation_m=packed,
                 fill_value=np.asarray([FILL_VALUE], dtype=np.int16),
@@ -529,8 +591,8 @@ def model_hour_archive_path(root: Path, stamp: str, fhour: int) -> Path:
     return model_run_archive_dir(root, stamp) / f"f{fhour:03d}.npz"
 
 
-def baseline_hour_archive_path(root: Path, stamp: str, fhour: int) -> Path:
-    return baseline_archive_dir(root) / stamp[:4] / stamp / f"f{fhour:03d}.npz"
+def baseline_hour_archive_path(root: Path, stamp: str, fhour: int, model_key: str = "continental") -> Path:
+    return baseline_archive_dir(root, model_key) / stamp[:4] / stamp / f"f{fhour:03d}.npz"
 
 
 def hourly_lpi_run_archive_dir(root: Path, stamp: str) -> Path:
@@ -548,7 +610,11 @@ def _write_hourly_lpi_schema(root: Path) -> None:
         "model": "ECCC HRDPS continental 2.5 km",
         "archive_resolution_km": MODEL_RESOLUTION_KM,
         "eligible_cycles_utc": sorted(HOURLY_LPI_ARCHIVE_CYCLES),
-        "forecast_hours": list(HOURLY_LPI_FORECAST_HOURS),
+        "forecast_hours_by_cycle": {
+            cycle: list(hours) for cycle, hours in HOURLY_LPI_FORECAST_HOURS_BY_CYCLE.items()
+        },
+        "archive_domain": "British Columbia plus buffer",
+        "archive_domain_buffer_km": ARCHIVE_DOMAIN_BUFFER_KM,
         "temporal_representation": "instantaneous hourly snapshot",
         "fill_value": int(FILL_VALUE),
         "packing_formula": "physical_value = packed_int16 * scale + offset",
@@ -564,8 +630,9 @@ def _write_hourly_lpi_schema(root: Path) -> None:
 
 def _update_hourly_lpi_manifest(root: Path, run: hrdps.RunInfo, grid_hash: str) -> Path:
     run_dir = hourly_lpi_run_archive_dir(root, run.stamp)
+    expected_hours = hourly_lpi_forecast_hours(run.cycle)
     archived_hours = [
-        hour for hour in HOURLY_LPI_FORECAST_HOURS if hourly_lpi_hour_archive_path(root, run.stamp, hour).exists()
+        hour for hour in expected_hours if hourly_lpi_hour_archive_path(root, run.stamp, hour).exists()
     ]
     total_bytes = sum(hourly_lpi_hour_archive_path(root, run.stamp, hour).stat().st_size for hour in archived_hours)
     payload = {
@@ -576,9 +643,9 @@ def _update_hourly_lpi_manifest(root: Path, run: hrdps.RunInfo, grid_hash: str) 
         "run_stamp": run.stamp,
         "cycle_utc": run.cycle,
         "init_time_utc": utc_iso(run.init_time),
-        "expected_hours": list(HOURLY_LPI_FORECAST_HOURS),
+        "expected_hours": list(expected_hours),
         "archived_hours": archived_hours,
-        "complete": archived_hours == list(HOURLY_LPI_FORECAST_HOURS),
+        "complete": archived_hours == list(expected_hours),
         "grid_hash": grid_hash,
         "archive_bytes": total_bytes,
         "updated_at_utc": utc_iso(dt.datetime.now(dt.timezone.utc)),
@@ -600,7 +667,7 @@ def archive_hourly_lpi_ingredients(
 ) -> Path:
     if not should_archive_hourly_lpi_run("continental", run.cycle):
         raise ValueError(f"Run {run.stamp} is not eligible for the hourly LPI ingredient archive.")
-    if fhour not in HOURLY_LPI_FORECAST_HOURS:
+    if fhour not in hourly_lpi_forecast_hours(run.cycle):
         raise ValueError(f"Unsupported hourly LPI forecast hour: {fhour}")
     root = ensure_archive_root(root)
     _write_hourly_lpi_schema(root)
@@ -612,7 +679,7 @@ def archive_hourly_lpi_ingredients(
     sample = (slice(None, None, max(1, int(stride))), slice(None, None, max(1, int(stride))))
     sampled_lat = np.asarray(lat[sample], dtype=np.float32)
     sampled_lon = np.asarray(lon[sample], dtype=np.float32)
-    grid_hash = _ensure_grid_archive(root, sampled_lat, sampled_lon)
+    grid_hash, domain_mask = _ensure_grid_archive(root, sampled_lat, sampled_lon)
     arrays: dict[str, np.ndarray] = {}
     clipped_counts: dict[str, int] = {}
     for spec in HOURLY_LPI_INGREDIENT_SPECS:
@@ -624,7 +691,7 @@ def archive_hourly_lpi_ingredients(
             raise RuntimeError(
                 f"Hourly LPI field {spec.attribute} has shape {sampled.shape}; expected {sampled_lat.shape}."
             )
-        arrays[spec.key], clipped_counts[spec.key] = _pack_field(sampled, spec)
+        arrays[spec.key], clipped_counts[spec.key] = _pack_field(sampled, spec, domain_mask)
 
     valid_time = run.init_time + dt.timedelta(hours=fhour)
     arrays.update(
@@ -670,11 +737,17 @@ def archive_hourly_lpi_ingredients(
     return out_path
 
 
-def archive_lpi_baseline_hour(root: Path, run: hrdps.RunInfo, cache_path: Path, fhour: int) -> Path:
-    if not should_archive_hourly_lpi_run("continental", run.cycle):
-        raise ValueError(f"Run {run.stamp} is not an eligible LPI baseline archive cycle.")
+def archive_lpi_baseline_hour(
+    root: Path,
+    run: hrdps.RunInfo,
+    cache_path: Path,
+    fhour: int,
+    model_key: str = "continental",
+) -> Path:
+    if not should_archive_lpi_baseline_run(model_key, run.cycle):
+        raise ValueError(f"{model_key} run {run.stamp} is not an eligible LPI baseline archive cycle.")
     root = ensure_archive_root(root)
-    out_path = baseline_hour_archive_path(root, run.stamp, fhour)
+    out_path = baseline_hour_archive_path(root, run.stamp, fhour, model_key)
     if out_path.exists():
         return out_path
     if not cache_path.exists():
@@ -682,8 +755,29 @@ def archive_lpi_baseline_hour(root: Path, run: hrdps.RunInfo, cache_path: Path, 
 
     with np.load(cache_path) as cache:
         potential = cache["potential"].astype(np.float32)
+        lat = cache["lat"].astype(np.float32)
+        lon = cache["lon"].astype(np.float32)
+        cache_model_key = str(cache["model_key"].item()) if "model_key" in cache else model_key
         formula_version = str(cache["formula_version"].item()) if "formula_version" in cache else "unknown"
-        cache_grid_hash = _grid_hash(cache["lat"].astype(np.float32), cache["lon"].astype(np.float32))
+        cache_grid_hash = _grid_hash(lat, lon)
+    if cache_model_key != model_key:
+        raise RuntimeError(f"LPI cache model {cache_model_key} does not match requested archive model {model_key}.")
+    static_dir = baseline_archive_dir(root, model_key) / "static"
+    grid_path = static_dir / "grid.npz"
+    if grid_path.exists():
+        with np.load(grid_path) as grid:
+            archived_hash = str(grid["grid_hash"].item())
+        if archived_hash != cache_grid_hash:
+            raise RuntimeError(f"{model_key} LPI baseline grid changed: {archived_hash} != {cache_grid_hash}.")
+    else:
+        static_dir.mkdir(parents=True, exist_ok=True)
+        tmp_grid = grid_path.with_suffix(grid_path.suffix + f".{os.getpid()}.tmp")
+        try:
+            with tmp_grid.open("wb") as handle:
+                np.savez_compressed(handle, lat=lat, lon=lon, grid_hash=np.asarray(cache_grid_hash))
+            tmp_grid.replace(grid_path)
+        finally:
+            tmp_grid.unlink(missing_ok=True)
     packed = np.full(potential.shape, 255, dtype=np.uint8)
     valid = np.isfinite(potential)
     packed[valid] = np.clip(np.rint(potential[valid] * 2.0), 0.0, 200.0).astype(np.uint8)
@@ -694,8 +788,9 @@ def archive_lpi_baseline_hour(root: Path, run: hrdps.RunInfo, cache_path: Path, 
         with tmp_path.open("wb") as handle:
             np.savez_compressed(
                 handle,
-                schema_version=np.asarray([ARCHIVE_SCHEMA_VERSION], dtype=np.int16),
+                schema_version=np.asarray([BASELINE_SCHEMA_VERSION], dtype=np.int16),
                 run_stamp=np.asarray(run.stamp),
+                model_key=np.asarray(model_key),
                 forecast_hour=np.asarray([fhour], dtype=np.int16),
                 valid_unix=np.asarray([int((run.init_time + dt.timedelta(hours=fhour)).timestamp())], dtype=np.int64),
                 formula_version=np.asarray(formula_version),
@@ -710,8 +805,9 @@ def archive_lpi_baseline_hour(root: Path, run: hrdps.RunInfo, cache_path: Path, 
     write_json_atomic(
         out_path.with_suffix(".json"),
         {
-            "schema_version": ARCHIVE_SCHEMA_VERSION,
+            "schema_version": BASELINE_SCHEMA_VERSION,
             "run_stamp": run.stamp,
+            "model_key": model_key,
             "forecast_hour": fhour,
             "valid_time_utc": utc_iso(run.init_time + dt.timedelta(hours=fhour)),
             "formula_version": formula_version,
@@ -730,34 +826,38 @@ def archive_lpi_baseline_hours(
     run: hrdps.RunInfo,
     lightning_output_dir: Path,
     hours: Iterable[int],
+    model_key: str = "continental",
 ) -> list[Path]:
     outputs: list[Path] = []
     cache_dir = lightning_output_dir / run.stamp / "lpi_cache"
     for fhour in sorted(set(int(hour) for hour in hours)):
-        cache_path = cache_dir / f"hrdps_continental_lightning_{run.stamp}_f{fhour:03d}_lpi.npz"
+        cache_path = cache_dir / f"hrdps_{model_key}_lightning_{run.stamp}_f{fhour:03d}_lpi.npz"
         if not cache_path.exists():
             continue
-        outputs.append(archive_lpi_baseline_hour(root, run, cache_path, fhour))
+        outputs.append(archive_lpi_baseline_hour(root, run, cache_path, fhour, model_key))
     if outputs:
-        log(f"Archived {len(outputs)} handmade-LPI baseline hour(s) for {run.stamp}.")
+        log(f"Archived {len(outputs)} {model_key} handmade-LPI baseline hour(s) for {run.stamp}.")
     return outputs
 
 
 def _update_run_manifest(root: Path, run: hrdps.RunInfo, grid_hash: str) -> Path:
     run_archive_dir = model_run_archive_dir(root, run.stamp)
-    archived_hours = [hour for hour in MODEL_FORECAST_HOURS if model_hour_archive_path(root, run.stamp, hour).exists()]
+    expected_hours = model_forecast_hours(run.cycle)
+    archived_hours = [
+        hour for hour in expected_hours if model_hour_archive_path(root, run.stamp, hour).exists()
+    ]
     total_bytes = sum(model_hour_archive_path(root, run.stamp, hour).stat().st_size for hour in archived_hours)
     payload = {
-        "schema_version": ARCHIVE_SCHEMA_VERSION,
+        "schema_version": MODEL_ARCHIVE_SCHEMA_VERSION,
         "model_key": "continental",
         "model_label": "ECCC HRDPS continental 2.5 km",
         "archive_resolution_km": MODEL_RESOLUTION_KM,
         "run_stamp": run.stamp,
         "cycle_utc": run.cycle,
         "init_time_utc": utc_iso(run.init_time),
-        "expected_hours": list(MODEL_FORECAST_HOURS),
+        "expected_hours": list(expected_hours),
         "archived_hours": archived_hours,
-        "complete": archived_hours == list(MODEL_FORECAST_HOURS),
+        "complete": archived_hours == list(expected_hours),
         "grid_hash": grid_hash,
         "archive_bytes": total_bytes,
         "updated_at_utc": utc_iso(dt.datetime.now(dt.timezone.utc)),
@@ -770,7 +870,7 @@ def _update_run_manifest(root: Path, run: hrdps.RunInfo, grid_hash: str) -> Path
 def archive_model_hour(root: Path, run: hrdps.RunInfo, data_dir: Path, fhour: int) -> Path:
     if not should_archive_model_run("continental", run.cycle):
         raise ValueError(f"Run {run.stamp} is not an eligible twice-daily continental archive cycle.")
-    if fhour not in MODEL_FORECAST_HOURS:
+    if fhour not in model_forecast_hours(run.cycle):
         raise ValueError(f"Unsupported HRDPS archive forecast hour: {fhour}")
     root = ensure_archive_root(root)
     _write_model_schema(root)
@@ -794,8 +894,17 @@ def archive_model_hour(root: Path, run: hrdps.RunInfo, data_dir: Path, fhour: in
     stride = max(1, int(round(MODEL_RESOLUTION_KM / hrdps.MODEL_CONFIGS["continental"].resolution_km)))
     lat = full_lat[yslice, xslice][::stride, ::stride]
     lon = full_lon[yslice, xslice][::stride, ::stride]
-    grid_hash = _ensure_grid_archive(root, lat, lon)
-    _ensure_terrain_archive(root, data_dir / run.stamp, run.stamp, yslice, xslice, stride, grid_hash)
+    grid_hash, domain_mask = _ensure_grid_archive(root, lat, lon)
+    _ensure_terrain_archive(
+        root,
+        data_dir / run.stamp,
+        run.stamp,
+        yslice,
+        xslice,
+        stride,
+        grid_hash,
+        domain_mask,
+    )
 
     arrays: dict[str, np.ndarray] = {}
     clipped_counts: dict[str, int] = {}
@@ -806,12 +915,12 @@ def archive_model_hour(root: Path, run: hrdps.RunInfo, data_dir: Path, fhour: in
         sample = data[yslice, xslice][::stride, ::stride]
         if sample.shape != lat.shape:
             raise RuntimeError(f"Field {name} has shape {sample.shape}; expected {lat.shape}.")
-        arrays[spec.key], clipped_counts[spec.key] = _pack_field(sample, spec)
+        arrays[spec.key], clipped_counts[spec.key] = _pack_field(sample, spec, domain_mask)
         source_files[spec.key] = name
 
     valid_time = run.init_time + dt.timedelta(hours=int(fhour))
     arrays.update(
-        schema_version=np.asarray([ARCHIVE_SCHEMA_VERSION], dtype=np.int16),
+        schema_version=np.asarray([MODEL_ARCHIVE_SCHEMA_VERSION], dtype=np.int16),
         run_stamp=np.asarray(run.stamp),
         cycle_utc=np.asarray([int(run.cycle)], dtype=np.int8),
         forecast_hour=np.asarray([int(fhour)], dtype=np.int16),
@@ -834,7 +943,7 @@ def archive_model_hour(root: Path, run: hrdps.RunInfo, data_dir: Path, fhour: in
     write_json_atomic(
         sidecar_path,
         {
-            "schema_version": ARCHIVE_SCHEMA_VERSION,
+            "schema_version": MODEL_ARCHIVE_SCHEMA_VERSION,
             "run_stamp": run.stamp,
             "forecast_hour": fhour,
             "valid_time_utc": utc_iso(valid_time),
@@ -856,7 +965,8 @@ def archive_model_hours(root: Path, run: hrdps.RunInfo, data_dir: Path, hours: I
     if not should_archive_model_run("continental", run.cycle):
         return []
     outputs = []
-    for hour in sorted(set(hours)):
+    eligible_hours = set(model_forecast_hours(run.cycle))
+    for hour in sorted(set(int(hour) for hour in hours) & eligible_hours):
         path = archive_model_hour(root, run, data_dir, int(hour))
         outputs.append(path)
         log(f"  archived {run.stamp} F{int(hour):03d}: {path.stat().st_size / (1024 * 1024):.1f} MiB")
@@ -875,7 +985,8 @@ def run_archive_complete(root: Path, stamp: str) -> bool:
         return False
     if not manifest.get("complete"):
         return False
-    return all(model_hour_archive_path(root, stamp, hour).exists() for hour in MODEL_FORECAST_HOURS)
+    cycle = f"{hrdps.parse_stamp(stamp):%H}"
+    return all(model_hour_archive_path(root, stamp, hour).exists() for hour in model_forecast_hours(cycle))
 
 
 def hourly_lpi_run_complete(root: Path, stamp: str) -> bool:
@@ -886,20 +997,27 @@ def hourly_lpi_run_complete(root: Path, stamp: str) -> bool:
         manifest = json.loads(manifest_path.read_text())
     except (OSError, json.JSONDecodeError):
         return False
+    cycle = f"{hrdps.parse_stamp(stamp):%H}"
     return bool(manifest.get("complete")) and all(
-        hourly_lpi_hour_archive_path(root, stamp, hour).exists() for hour in HOURLY_LPI_FORECAST_HOURS
+        hourly_lpi_hour_archive_path(root, stamp, hour).exists()
+        for hour in hourly_lpi_forecast_hours(cycle)
     )
 
 
-def baseline_lpi_run_complete(root: Path, stamp: str) -> bool:
-    return all(baseline_hour_archive_path(root, stamp, hour).exists() for hour in MODEL_FORECAST_HOURS)
+def baseline_lpi_run_complete(root: Path, stamp: str, model_key: str = "continental") -> bool:
+    return all(
+        baseline_hour_archive_path(root, stamp, hour, model_key).exists()
+        for hour in BASELINE_FORECAST_HOURS
+    )
 
 
 def required_run_archives_complete(root: Path, model_key: str, cycle: str, stamp: str) -> bool:
     if should_archive_model_run(model_key, cycle) and not run_archive_complete(root, stamp):
         return False
     if should_archive_hourly_lpi_run(model_key, cycle):
-        return hourly_lpi_run_complete(root, stamp) and baseline_lpi_run_complete(root, stamp)
+        return hourly_lpi_run_complete(root, stamp) and baseline_lpi_run_complete(root, stamp, model_key)
+    if should_archive_lpi_baseline_run(model_key, cycle):
+        return baseline_lpi_run_complete(root, stamp, model_key)
     return True
 
 
@@ -909,7 +1027,7 @@ def archive_status(root: Path) -> dict[str, object]:
     obs_paths = sorted(obs_dir.glob("*/*/*.tif")) if obs_dir.exists() else []
     manifests = sorted(model_dir.glob("*/*/manifest.json")) if model_dir.exists() else []
     model_hours = sorted(model_dir.glob("*/*/f*.npz")) if model_dir.exists() else []
-    baseline_dir = baseline_archive_dir(root)
+    baseline_dir = baseline_archive_dir(root, "continental")
     baseline_hours = sorted(baseline_dir.glob("*/*/f*.npz")) if baseline_dir.exists() else []
     hourly_dir = hourly_lpi_archive_dir(root)
     hourly_manifests = sorted(hourly_dir.glob("*/*/manifest.json")) if hourly_dir.exists() else []
@@ -942,7 +1060,12 @@ def archive_status(root: Path) -> dict[str, object]:
     baseline_bytes = sum(path.stat().st_size for path in baseline_hours)
     hourly_lpi_bytes = sum(path.stat().st_size for path in hourly_hours)
     return {
-        "schema_version": ARCHIVE_SCHEMA_VERSION,
+        "schema_versions": {
+            "observations": OBSERVATION_SCHEMA_VERSION,
+            "model": MODEL_ARCHIVE_SCHEMA_VERSION,
+            "baseline": BASELINE_SCHEMA_VERSION,
+            "hourly_lpi": HOURLY_LPI_SCHEMA_VERSION,
+        },
         "archive_root": str(root),
         "observation_blocks": len(obs_paths),
         "latest_observation_block": obs_paths[-1].stem.split("_MSC_")[0] if obs_paths else None,
@@ -959,7 +1082,12 @@ def archive_status(root: Path) -> dict[str, object]:
         "model_bytes": model_bytes,
         "baseline_lpi_bytes": baseline_bytes,
         "hourly_lpi_bytes": hourly_lpi_bytes,
-        "archive_bytes": observation_bytes + model_bytes + baseline_bytes + hourly_lpi_bytes,
+        "archive_bytes": (
+            observation_bytes
+            + model_bytes
+            + baseline_bytes
+            + hourly_lpi_bytes
+        ),
         "filesystem_free_bytes": usage.free if usage else None,
         "updated_at_utc": utc_iso(dt.datetime.now(dt.timezone.utc)),
     }
@@ -974,7 +1102,7 @@ def write_archive_status(root: Path) -> Path:
 
 def parse_hours(text: str | None) -> tuple[int, ...]:
     if not text:
-        return MODEL_FORECAST_HOURS
+        return BASELINE_FORECAST_HOURS
     return tuple(int(item) for item in text.split(",") if item.strip())
 
 
@@ -994,6 +1122,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
 
     baseline_parser = subparsers.add_parser("archive-baseline")
     baseline_parser.add_argument("--run", required=True)
+    baseline_parser.add_argument("--model", choices=("continental",), default="continental")
     baseline_parser.add_argument("--cache-dir", type=Path, default=DEFAULT_LPI_CACHE_DIR)
     baseline_parser.add_argument("--hours", default=None)
 
@@ -1020,8 +1149,14 @@ def main(argv: Iterable[str]) -> int:
         verify_archive_writable(args.archive_root)
         init_time = hrdps.parse_stamp(args.run)
         run = hrdps.RunInfo(cycle=f"{init_time:%H}", stamp=args.run, init_time=init_time)
-        hrdps.set_model("continental")
-        archive_lpi_baseline_hours(args.archive_root, run, args.cache_dir, parse_hours(args.hours))
+        hrdps.set_model(args.model)
+        archive_lpi_baseline_hours(
+            args.archive_root,
+            run,
+            args.cache_dir,
+            parse_hours(args.hours),
+            model_key=args.model,
+        )
         write_archive_status(args.archive_root)
         return 0
     if args.command == "status":

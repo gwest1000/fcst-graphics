@@ -56,6 +56,16 @@ FOURPANEL_COLORBAR_AX = [
     0.028,
     1.0 - FOURPANEL_HEADER_BAND_HEIGHT - FOURPANEL_FOOTER_BAND_HEIGHT,
 ]
+FOURPANEL_PRECIP_COLORBAR_INSET = 0.006
+FOURPANEL_PRECIP_COLORBAR_AX = [
+    FOURPANEL_COLORBAR_AX[0],
+    FOURPANEL_FOOTER_BAND_HEIGHT + FOURPANEL_PRECIP_COLORBAR_INSET,
+    FOURPANEL_COLORBAR_AX[2],
+    1.0
+    - FOURPANEL_HEADER_BAND_HEIGHT
+    - FOURPANEL_FOOTER_BAND_HEIGHT
+    - 2.0 * FOURPANEL_PRECIP_COLORBAR_INSET,
+]
 FOURPANEL_BARB_COLUMNS = 16
 FOURPANEL_BARB_ROWS = 12
 VECTOR_TARGET_SPACING_PX = 42.0
@@ -231,6 +241,27 @@ def add_fourpanel_colorbar(
     )
 
 
+def add_fourpanel_precip_colorbar(
+    fig: plt.Figure,
+    ax: plt.Axes,
+    mappable,
+    ticks: Iterable[float],
+    label: str = "mm",
+    **kwargs,
+) -> None:
+    add_internal_colorbar(
+        fig,
+        ax,
+        mappable,
+        ticks=ticks,
+        label=label,
+        backdrop=FOURPANEL_COLORBAR_BACKDROP,
+        cax_bounds=FOURPANEL_PRECIP_COLORBAR_AX,
+        labelpad=-0.5,
+        **kwargs,
+    )
+
+
 def add_source_stamp(
     ax: plt.Axes,
     run,
@@ -366,6 +397,7 @@ def add_single_panel_text(
     footer: str,
     run,
     source_label: str = "CMC",
+    source_text: str | None = None,
     *,
     header_y: float = 0.992,
     source_x: float = 0.986,
@@ -376,7 +408,7 @@ def add_single_panel_text(
         ax,
         header,
         footer,
-        f"Data:{source_label} | Init:{run.init_time:%Y%m%d%H}",
+        source_text or f"Data:{source_label} | Init:{run.init_time:%Y%m%d%H}",
         header_fontsize=SINGLE_HEADER_FONTSIZE,
         footer_fontsize=SINGLE_FOOTER_FONTSIZE,
         source_fontsize=SINGLE_SOURCE_FONTSIZE,

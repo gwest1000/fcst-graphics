@@ -10,13 +10,14 @@ plots/
 examples/
 analysis/
 
-data/cwfis_fwi/
-data/fire_activity/
-data/fire_danger_bcws/
-data/fire_danger_verification/
-data/hrdps_continental/
-data/hrdps_west/
-data/lightning_obs/
-data/lightning_obs_test/
-data/test/
+data/cwfis_fwi
+data/fire_activity
+data/fire_danger_bcws
+data/fire_danger_verification
+data/hrdps_continental
+data/hrdps_west
+data/lightning_obs
+data/lightning_obs_test
+data/lightning_ml
+data/test
 data/test_cwfis_fwi.tif

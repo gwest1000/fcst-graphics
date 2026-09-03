@@ -20,7 +20,6 @@ from make_ensemble_control_fourpanel import GEFS_FORECAST_HOURS as GEFS_CONTROL_
 from make_hrdps_west_convective import parse_stamp
 from make_hrdps_west_fourpanel import FORECAST_HOURS as FOURPANEL_FORECAST_HOURS
 from make_hrdps_west_lightning import FORECAST_HOURS as LIGHTNING_FORECAST_HOURS
-from make_hrdps_wind import FORECAST_HOURS as WIND_FORECAST_HOURS
 from make_hrdps_evolved_danger_class import FORECAST_HOURS as FWI2025_DANGER_FORECAST_HOURS
 from make_hrdps_temperature import FORECAST_HOURS as TEMPERATURE_FORECAST_HOURS
 from make_ecmwf_ensemble_spread import FORECAST_HOURS as ECMWF_ENSEMBLE_FORECAST_HOURS
@@ -30,8 +29,10 @@ DEFAULT_PAGES_REPO = Path("/Users/greg/projects/fcstpp-reports-pages")
 STAMP_RE = re.compile(r"^\d{8}T\d{2}Z$")
 CONTACT_SHEET_RE = re.compile(r".*_contact_sheet\.png$")
 TOP_LEVEL_IMAGE_RE = re.compile(r"^hrdps_west_(?:fourpanel|lightning)_(\d{8}T\d{2}Z)_f\d{3}\.png$")
-VERIFICATION_PRODUCT_KEYS = frozenset({"lightning_verif", "continental_lightning_verif", "fire_danger_verif"})
-VERIFICATION_KEEP_DAYS = 60
+VERIFICATION_PRODUCT_KEYS = frozenset({"continental_lightning_verif", "fire_danger_verif"})
+# Public web/R2 retention. Rendered verification images follow the same 14-day
+# local and public policy; compact scientific archives are retained separately.
+VERIFICATION_KEEP_DAYS = 14
 MIN_MANIFEST_FRAME_FRACTION = 0.60
 PNGQUANT_QUALITY = "70-90"
 FIRE_WEATHER_TWO_PANEL_DESCRIPTION = (
@@ -58,32 +59,6 @@ class ProductConfig:
 
 
 PRODUCTS: dict[str, ProductConfig] = {
-    "fourpanel": ProductConfig(
-        key="fourpanel",
-        prefix="hrdps_west_fourpanel",
-        label="Convective 4-Panel",
-        category="4-Panel",
-        plot_type="Convective 4-Panel",
-        area="BC",
-        model="HRDPS-West 1 km",
-        description="500 hPa vorticity/height/250 hPa wind, IPW/LI/CAPE, 850-700 hPa RH/850 hPa temperature/850-or-700 hPa wind, and 3-hour precipitation/MSLP/10 m wind.",
-        hours=FOURPANEL_FORECAST_HOURS,
-        archive_subdir="fourpanel",
-        model_key="west",
-    ),
-    "fwi2025_danger": ProductConfig(
-        key="fwi2025_danger",
-        prefix="hrdps_west_fwi2025_danger",
-        label="Experimental Hourly Fire Danger",
-        category="Surface",
-        plot_type="Experimental Hourly Fire Danger",
-        area="BC",
-        model="HRDPS-West 1 km",
-        description="Hourly FWI2025 evolution anchored to CWFIS FFMC/DMC/DC, with continuous FWI and BUI smoothed over 2 km before classification by the BC Schedule 2 danger-region matrices.",
-        hours=FWI2025_DANGER_FORECAST_HOURS,
-        archive_subdir="fwi2025_danger",
-        model_key="west",
-    ),
     "continental_fwi2025_danger": ProductConfig(
         key="continental_fwi2025_danger",
         prefix="hrdps_continental_fwi2025_danger",
@@ -96,97 +71,6 @@ PRODUCTS: dict[str, ProductConfig] = {
         hours=FWI2025_DANGER_FORECAST_HOURS,
         archive_subdir="continental/fwi2025_danger",
         model_key="continental",
-    ),
-    "lightning_sw": ProductConfig(
-        key="lightning_sw",
-        prefix="hrdps_west_lightning_sw",
-        label="Fire Weather",
-        category="Surface",
-        plot_type="Fire Weather",
-        area="SW BC",
-        model="HRDPS-West 1 km",
-        description=FIRE_WEATHER_TWO_PANEL_DESCRIPTION,
-        hours=LIGHTNING_FORECAST_HOURS,
-        archive_subdir="lightning/sw",
-        model_key="west",
-    ),
-    "wind_south_coast": ProductConfig(
-        key="wind_south_coast",
-        prefix="hrdps_west_wind_south_coast",
-        label="10 m Wind",
-        category="Surface",
-        plot_type="10 m Wind",
-        area="South Coast",
-        model="HRDPS-West 1 km",
-        description="Valid-time sustained 10 m wind shown by arrow fill, with the maximum all-cause gust over the preceding three-hour block shown by the arrow outline.",
-        hours=WIND_FORECAST_HOURS,
-        archive_subdir="wind/south_coast",
-        model_key="west",
-    ),
-    "lightning_se": ProductConfig(
-        key="lightning_se",
-        prefix="hrdps_west_lightning_se",
-        label="Fire Weather",
-        category="Surface",
-        plot_type="Fire Weather",
-        area="SE BC",
-        model="HRDPS-West 1 km",
-        description=FIRE_WEATHER_TWO_PANEL_DESCRIPTION,
-        hours=LIGHTNING_FORECAST_HOURS,
-        archive_subdir="lightning/se",
-        model_key="west",
-    ),
-    "lightning_ne": ProductConfig(
-        key="lightning_ne",
-        prefix="hrdps_west_lightning_ne",
-        label="Fire Weather",
-        category="Surface",
-        plot_type="Fire Weather",
-        area="NE BC",
-        model="HRDPS-West 1 km",
-        description=FIRE_WEATHER_TWO_PANEL_DESCRIPTION,
-        hours=LIGHTNING_FORECAST_HOURS,
-        archive_subdir="lightning/ne",
-        model_key="west",
-    ),
-    "temperature_south": ProductConfig(
-        key="temperature_south",
-        prefix="hrdps_west_temperature_south",
-        label="2 m Temperature",
-        category="Surface",
-        plot_type="2 m Temperature",
-        area="Southern BC",
-        model="HRDPS-West 1 km",
-        description="Valid-time 2 m temperature shaded every 2°C with labelled grey isotherms every 10°C and BCH watershed outlines.",
-        hours=TEMPERATURE_FORECAST_HOURS,
-        archive_subdir="temperature/south",
-        model_key="west",
-    ),
-    "temperature_north": ProductConfig(
-        key="temperature_north",
-        prefix="hrdps_west_temperature_north",
-        label="2 m Temperature",
-        category="Surface",
-        plot_type="2 m Temperature",
-        area="Northern BC",
-        model="HRDPS-West 1 km",
-        description="Valid-time 2 m temperature shaded every 2°C with labelled grey isotherms every 10°C and BCH watershed outlines.",
-        hours=TEMPERATURE_FORECAST_HOURS,
-        archive_subdir="temperature/north",
-        model_key="west",
-    ),
-    "lightning_verif": ProductConfig(
-        key="lightning_verif",
-        prefix="hrdps_west_lightning_verif",
-        label="LPI Verification",
-        category="Surface",
-        plot_type="LPI Verification",
-        area="BC",
-        model="HRDPS-West 1 km",
-        description="First 12Z-12Z LPI forecast-period maximum shading with observed 24-hour ECCC lightning-density categories overlaid.",
-        hours=LIGHTNING_FORECAST_HOURS,
-        archive_subdir="lightning_verif",
-        model_key="west",
     ),
     "continental_fourpanel": ProductConfig(
         key="continental_fourpanel",
@@ -260,8 +144,8 @@ PRODUCTS: dict[str, ProductConfig] = {
         category="4-Panel",
         plot_type="Synoptic 4-Panel",
         area="BC",
-        model="ECMWF IFS Control",
-        description="500 hPa vorticity/height/wind, IPW/vapor transport/low-level vertical velocity where available, 850-700 hPa RH/850 hPa temperature/850-or-700 hPa wind, and period precipitation/MSLP/10 m wind. Forecasts are 3-hourly through F144 and 6-hourly through F252.",
+        model="ECMWF Control",
+        description="500 hPa vorticity/height/wind, IPW/vapor transport/low-level vertical velocity where available, 850-700 hPa RH/850 hPa temperature/850-or-700 hPa wind, and period precipitation/MSLP/10 m wind. Forecasts are 3-hourly through F144 and 6-hourly through F360.",
         hours=ENSEMBLE_CONTROL_FORECAST_HOURS,
         archive_subdir="ecmwf/control/fourpanel",
         model_key="ecmwf_control",
@@ -273,8 +157,8 @@ PRODUCTS: dict[str, ProductConfig] = {
         category="4-Panel",
         plot_type="Convective 4-Panel",
         area="BC",
-        model="ECMWF IFS Control",
-        description="ECMWF control 500 hPa vorticity/height/wind, IPW with computed surface-based LI and MUCAPE, 850-700 hPa RH/850 hPa temperature/850-or-700 hPa wind, and period precipitation/MSLP/10 m wind. Forecasts are 3-hourly through F144 and 6-hourly through F252.",
+        model="ECMWF Control",
+        description="ECMWF control 500 hPa vorticity/height/wind, IPW with computed surface-based LI and MUCAPE, 850-700 hPa RH/850 hPa temperature/850-or-700 hPa wind, and period precipitation/MSLP/10 m wind. Forecasts are 3-hourly through F144 and 6-hourly through F360.",
         hours=ENSEMBLE_CONTROL_FORECAST_HOURS,
         archive_subdir="ecmwf/control/convective_fourpanel",
         model_key="ecmwf_control",
@@ -308,22 +192,12 @@ PRODUCTS: dict[str, ProductConfig] = {
 }
 
 PRODUCTS_BY_MODEL = {
-    "west": (
-        "lightning_sw",
-        "lightning_se",
-        "lightning_ne",
-        "wind_south_coast",
-        "temperature_south",
-        "temperature_north",
-        "fwi2025_danger",
-    ),
     "continental": (
         "continental_fourpanel",
         "continental_lightning_twopanel",
         "continental_temperature",
         "continental_fwi2025_danger",
     ),
-    "west_verif": ("lightning_verif",),
     "continental_verif": ("continental_lightning_verif",),
     "danger_verif": ("fire_danger_verif",),
     "ecmwf_control": (
@@ -348,7 +222,7 @@ def manifest_product_keys() -> tuple[str, ...]:
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("stamp", help="Run stamp to publish, e.g. 20260629T12Z.")
-    parser.add_argument("--model", choices=sorted(PRODUCTS_BY_MODEL), default="west")
+    parser.add_argument("--model", choices=sorted(PRODUCTS_BY_MODEL), default="continental")
     parser.add_argument("--plots-dir", type=Path, default=None, help="Convective plot directory.")
     parser.add_argument("--fourpanel-plots-dir", type=Path, default=None)
     parser.add_argument("--lightning-plots-dir", type=Path, default=None)
@@ -413,26 +287,16 @@ def available_image_names(plot_dir: Path, stamp: str, product_key: str) -> list[
 def default_plot_dir_for_product(product_key: str, model: str) -> Path:
     if product_key == "fire_danger_verif":
         return project_paths.plot_path("fire_danger_verification")
-    if product_key.endswith("lightning_verif"):
-        if product_key.startswith("continental_"):
-            return project_paths.plot_path("hrdps_continental_lightning_verif")
-        return project_paths.plot_path("hrdps_west_lightning_verif")
+    if product_key == "continental_lightning_verif":
+        return project_paths.plot_path("hrdps_continental_lightning_verif")
     if product_key.startswith("continental_lightning"):
         return project_paths.plot_path("hrdps_continental_lightning")
-    if product_key.startswith("lightning"):
-        return project_paths.plot_path("hrdps_west_lightning")
-    if product_key == "wind_south_coast":
-        return project_paths.plot_path("hrdps_west_lightning")
     if product_key == "continental_temperature":
         return project_paths.plot_path("hrdps_continental_temperature")
-    if product_key.startswith("temperature"):
-        return project_paths.plot_path("hrdps_west_temperature")
     if product_key.endswith("fwi2025_danger"):
         return project_paths.plot_path("experimental_fwi2025_danger")
     if product_key == "continental_fourpanel":
         return project_paths.plot_path("hrdps_continental_fourpanel")
-    if product_key == "fourpanel":
-        return project_paths.plot_path("hrdps_west_fourpanel")
     if product_key in {"ecmwf_control_fourpanel", "ecmwf_control_convective_fourpanel"}:
         return project_paths.plot_path("ecmwf_control_fourpanel")
     if product_key == "ecmwf_ensemble_spread_500":
@@ -456,7 +320,7 @@ def plot_dir_for_product(
         return lightning_verif_plots_dir or default_plot_dir_for_product(product_key, model)
     if product_key.endswith("fourpanel") or product_key.endswith("_fourpanel"):
         return fourpanel_plots_dir or default_plot_dir_for_product(product_key, model)
-    if "lightning" in product_key or product_key == "wind_south_coast":
+    if "lightning" in product_key:
         return lightning_plots_dir or default_plot_dir_for_product(product_key, model)
     if "temperature" in product_key:
         return temperature_plots_dir or default_plot_dir_for_product(product_key, model)
@@ -661,7 +525,7 @@ def publish(
     temperature_plots_dir: Path | None = None,
     danger_plots_dir: Path | None = None,
     lightning_verif_plots_dir: Path | None = None,
-    model: str = "west",
+    model: str = "continental",
     partial: bool = False,
 ) -> list[dict[str, object]]:
     if not STAMP_RE.match(stamp):

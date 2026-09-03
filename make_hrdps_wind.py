@@ -24,6 +24,7 @@ import make_hrdps_west_convective as hrdps
 import make_hrdps_west_fourpanel as fourpanel
 import make_hrdps_west_lightning as lightning
 import plot_style
+import project_paths
 
 
 FORECAST_HOURS = tuple(range(0, 49, 3))
@@ -470,7 +471,7 @@ def parse_args(argv: Iterable[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("plots/hrdps_west_lightning"),
+        default=project_paths.plot_path("hrdps_west_lightning"),
     )
     return parser.parse_args(argv)
 

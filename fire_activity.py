@@ -13,14 +13,16 @@ from typing import Callable
 
 import requests
 
+import project_paths
+
 
 ACTIVE_FIRE_URL = (
     "https://delivery.maps.gov.bc.ca/arcgis/rest/services/mpcm/"
     "bcgwpub/MapServer/502/query"
 )
 HOTSPOT_URL = "https://cwfis.cfs.nrcan.gc.ca/geoserver/public/ows"
-ACTIVE_FIRE_CACHE = Path("data/fire_activity/bcws_active_fires.json")
-HOTSPOT_CACHE = Path("data/fire_activity/cwfis_hotspots_24h.json")
+ACTIVE_FIRE_CACHE = project_paths.data_path("fire_activity", "bcws_active_fires.json")
+HOTSPOT_CACHE = project_paths.data_path("fire_activity", "cwfis_hotspots_24h.json")
 ACTIVE_CACHE_MAX_AGE = dt.timedelta(minutes=45)
 HOTSPOT_CACHE_MAX_AGE = dt.timedelta(minutes=45)
 STALE_CACHE_MAX_AGE = dt.timedelta(hours=12)
@@ -298,7 +300,18 @@ def load_fire_activity(
         return activity
     except (requests.RequestException, RuntimeError, ValueError) as exc:
         if logger:
-            logger(f"BCWS active-fire feed unavailable ({exc}); trying CWFIS hotspots.")
+            logger(f"BCWS active-fire feed unavailable ({exc}).")
+
+    if _fresh(cached_active, now, STALE_CACHE_MAX_AGE):
+        if logger:
+            logger(
+                f"Using cached BCWS active fires from "
+                f"{cached_active.retrieved_at:%H%MZ}; retaining flame markers."
+            )
+        return replace(cached_active, stale=True)
+
+    if logger:
+        logger("No recent BCWS active-fire cache is available; trying CWFIS hotspots.")
 
     cached_hotspots = read_cache(hotspot_cache)
     if _fresh(cached_hotspots, now, HOTSPOT_CACHE_MAX_AGE):

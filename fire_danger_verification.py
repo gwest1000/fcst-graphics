@@ -22,16 +22,16 @@ from scipy.spatial import cKDTree
 
 import fire_danger_peak
 import plot_style
+import project_paths
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
 DEFAULT_CONCRETE_DATA_ROOT = Path(
-    os.environ.get("FIRE_DANGER_BCWS_MIRROR_ROOT", PROJECT_ROOT / "data" / "fire_danger_bcws")
+    os.environ.get("FIRE_DANGER_BCWS_MIRROR_ROOT", project_paths.data_path("fire_danger_bcws"))
 )
 DEFAULT_ARCHIVE_ROOT = Path(
     os.environ.get(
         "FIRE_DANGER_VERIFICATION_ROOT",
-        PROJECT_ROOT / "data" / "fire_danger_verification",
+        project_paths.data_path("fire_danger_verification"),
     )
 )
 CLASS_NAMES = {1: "Very Low", 2: "Low", 3: "Moderate", 4: "High", 5: "Extreme"}

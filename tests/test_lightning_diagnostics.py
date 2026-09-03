@@ -38,6 +38,12 @@ class LightningDiagnosticTest(unittest.TestCase):
         self.assertEqual(lightning.dry_lightning_marker_area("sw"), 14.0)
         self.assertEqual(lightning.DRY_LIGHTNING_MARKER, (5, 2, 0))
         self.assertEqual(lightning.DRY_LIGHTNING_COLOR, "#161616")
+        self.assertEqual(lightning.DRY_LIGHTNING_DISPLAY_THRESHOLD, 15.0)
+        self.assertEqual(lightning.DRY_LIGHTNING_MIN_LPI, 20.0)
+
+    def test_lpi_display_smoothing_is_model_specific(self) -> None:
+        self.assertEqual(lightning.lpi_display_smoothing_km("continental"), 10.0)
+        self.assertEqual(lightning.lpi_display_smoothing_km("west"), 10.0)
 
     def test_fire_weather_region_expansions(self) -> None:
         self.assertEqual(lightning.FIRE_WEATHER_REGIONS["bc"].extent, (-138.2, -109.5, 46.0, 58.45))

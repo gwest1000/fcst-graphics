@@ -26,6 +26,7 @@ from scipy.interpolate import RegularGridInterpolator
 
 import plot_style
 import ecmwf_convective_data
+import project_paths
 from make_hrdps_west_convective import RunInfo, WATERSHED_CACHE, parse_stamp, subset_slices
 from make_hrdps_west_fourpanel import (
     DATA_CRS,
@@ -46,7 +47,7 @@ from make_hrdps_west_fourpanel import (
 )
 
 ECMWF_THREE_HOURLY_END = 144
-ECMWF_FORECAST_END = 252
+ECMWF_FORECAST_END = 360
 ECMWF_FORECAST_HOURS = (
     tuple(range(0, ECMWF_THREE_HOURLY_END + 1, 3))
     + tuple(range(ECMWF_THREE_HOURLY_END + 6, ECMWF_FORECAST_END + 1, 6))
@@ -79,6 +80,10 @@ IVT_VECTOR_STYLES = (
     (750.0, 1000.0, "#ffffff", 0.00310, "750-999"),
     (1000.0, np.inf, "#b000d4", 0.00345, "1000+"),
 )
+_GRIB_OFFSET_INDEXES: dict[
+    Path,
+    tuple[int, int, dict[tuple[str, str, int, int], int]],
+] = {}
 
 
 @dataclass(frozen=True)
@@ -94,10 +99,10 @@ class ModelConfig:
 MODEL_CONFIGS = {
     "ecmwf_control": ModelConfig(
         key="ecmwf_control",
-        label="ECMWF IFS Control",
+        label="ECMWF Ctl",
         source_label="ECMWF",
         output_prefix="ecmwf_control",
-        default_output_dir="plots/ecmwf_control_fourpanel",
+        default_output_dir=str(project_paths.plot_path("ecmwf_control_fourpanel")),
         resolution_km=28.0,
     ),
     "gefs_control": ModelConfig(
@@ -105,7 +110,7 @@ MODEL_CONFIGS = {
         label="GEFS Control",
         source_label="NOAA GEFS control",
         output_prefix="gefs_control",
-        default_output_dir="plots/gefs_control_fourpanel",
+        default_output_dir=str(project_paths.plot_path("gefs_control_fourpanel")),
         resolution_km=28.0,
     ),
 }
@@ -116,9 +121,8 @@ def model_hours(model: str) -> tuple[int, ...]:
 
 
 def panel_source_text(run: RunInfo, config: ModelConfig) -> str:
-    if config.key == "ecmwf_control":
-        return "Data: ECMWF"
-    return f"Data:{config.source_label} | Init:{run.init_time:%Y%m%d%H}"
+    separator = " " if config.key == "ecmwf_control" else ""
+    return f"Data:{separator}{config.source_label} | Init:{run.init_time:%Y%m%d%H}"
 
 
 def add_panel_text(
@@ -198,16 +202,44 @@ def latest_cycle_stamp(cycle: int = 0, now: dt.datetime | None = None) -> str:
     return f"{candidate:%Y%m%dT%HZ}"
 
 
+def grib_message_key(gid) -> tuple[str, str, int, int]:
+    return (
+        str(codes_get(gid, "shortName")).lower(),
+        str(codes_get(gid, "typeOfLevel")),
+        int(codes_get(gid, "level")),
+        int(codes_get(gid, "step")),
+    )
+
+
 def grib_field_matches(gid, short_name: str, level_type: str, level: int, step: int) -> bool:
     try:
-        return (
-            str(codes_get(gid, "shortName")).lower() == short_name.lower()
-            and str(codes_get(gid, "typeOfLevel")) == level_type
-            and int(codes_get(gid, "level")) == int(level)
-            and int(codes_get(gid, "step")) == int(step)
-        )
+        return grib_message_key(gid) == (short_name.lower(), level_type, int(level), int(step))
     except Exception:
         return False
+
+
+def grib_offset_index(path: Path) -> dict[tuple[str, str, int, int], int]:
+    path = path.resolve()
+    if not path.exists():
+        raise FileNotFoundError(path)
+    stat = path.stat()
+    cached = _GRIB_OFFSET_INDEXES.get(path)
+    if cached is not None and cached[:2] == (stat.st_size, stat.st_mtime_ns):
+        return cached[2]
+
+    offsets: dict[tuple[str, str, int, int], int] = {}
+    with path.open("rb") as handle:
+        while True:
+            offset = handle.tell()
+            gid = codes_grib_new_from_file(handle)
+            if gid is None:
+                break
+            try:
+                offsets.setdefault(grib_message_key(gid), offset)
+            finally:
+                codes_release(gid)
+    _GRIB_OFFSET_INDEXES[path] = (stat.st_size, stat.st_mtime_ns, offsets)
+    return offsets
 
 
 def grib_values(gid) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -222,21 +254,58 @@ def grib_values(gid) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
 
 
 def read_matching_grib(path: Path, short_name: str, level_type: str, level: int, step: int) -> Field:
-    if not path.exists():
-        raise FileNotFoundError(path)
+    key = (short_name.lower(), level_type, int(level), int(step))
+    offset = grib_offset_index(path).get(key)
+    if offset is None:
+        raise KeyError(f"{short_name}:{level_type}:{level}:F{step:03d} not found in {path}")
     with path.open("rb") as handle:
-        while True:
-            gid = codes_grib_new_from_file(handle)
-            if gid is None:
-                break
-            try:
-                if grib_field_matches(gid, short_name, level_type, level, step):
-                    data, lat, lon = grib_values(gid)
-                    step_range = str(codes_get(gid, "stepRange"))
-                    return Field(data=data, lat=lat, lon=lon, step_range=step_range)
-            finally:
-                codes_release(gid)
-    raise KeyError(f"{short_name}:{level_type}:{level}:F{step:03d} not found in {path}")
+        handle.seek(offset)
+        gid = codes_grib_new_from_file(handle)
+        if gid is None:
+            raise RuntimeError(f"Could not read indexed GRIB message at byte {offset}: {path}")
+        try:
+            if grib_message_key(gid) != key:
+                raise RuntimeError(f"Stale GRIB offset index for {path}")
+            data, lat, lon = grib_values(gid)
+            step_range = str(codes_get(gid, "stepRange"))
+            return Field(data=data, lat=lat, lon=lon, step_range=step_range)
+        finally:
+            codes_release(gid)
+
+
+def grib_inventory(path: Path) -> set[tuple[str, str, int, int]]:
+    """Read message metadata once instead of rescanning a GRIB for every field."""
+    return set(grib_offset_index(path))
+
+
+def required_ecmwf_grib_keys(
+    hours: Iterable[int],
+) -> tuple[set[tuple[str, str, int, int]], set[tuple[str, str, int, int]]]:
+    pressure_fields = (
+        ("gh", 500),
+        *((short_name, level) for level in (925, 850, 700, 500) for short_name in ("t", "r", "u", "v")),
+    )
+    surface_fields = (
+        ("tcwv", "entireAtmosphere", 0),
+        ("msl", "meanSea", 0),
+        ("2t", "heightAboveGround", 2),
+        ("2d", "heightAboveGround", 2),
+        ("10u", "heightAboveGround", 10),
+        ("10v", "heightAboveGround", 10),
+        ("tp", "surface", 0),
+    )
+    requested = tuple(int(hour) for hour in hours)
+    pressure = {
+        (short_name, "isobaricInhPa", level, hour)
+        for hour in requested
+        for short_name, level in pressure_fields
+    }
+    surface = {
+        (short_name, level_type, level, hour)
+        for hour in requested
+        for short_name, level_type, level in surface_fields
+    }
+    return pressure, surface
 
 
 def crop_extent(field: Field) -> Field:
@@ -695,7 +764,23 @@ def required_files_present(model: str, data_root: Path, run: RunInfo, hours: Ite
     provider = provider_for(model, data_root, run)
     try:
         if model == "ecmwf_control":
+            convective_path = ecmwf_convective_data.archive_path(
+                data_root,
+                f"{run.init_time:%Y%m%d}",
+                run.cycle,
+            )
+            if not ecmwf_convective_data.archive_has_hours(convective_path, hours):
+                raise FileNotFoundError(f"incomplete convective archive: {convective_path}")
+
+            cycle_root = provider.cycle_root()
+            expected_pressure, expected_surface = required_ecmwf_grib_keys(hours)
+            missing_pressure = expected_pressure - grib_inventory(cycle_root / "pl_cf.grib2")
+            missing_surface = expected_surface - grib_inventory(cycle_root / "sfc_cf.grib2")
+            if missing_pressure or missing_surface:
+                missing = sorted(missing_pressure | missing_surface)
+                raise FileNotFoundError(f"missing ECMWF fields: {missing[:8]}")
             provider.terrain()
+            return True
         for fhour in hours:
             provider.pressure(fhour, "gh", 500)
             provider.pressure(fhour, "u", 500)
@@ -713,14 +798,6 @@ def required_files_present(model: str, data_root: Path, run: RunInfo, hours: Ite
             provider.surface(fhour, "10u", "heightAboveGround", 10)
             provider.surface(fhour, "10v", "heightAboveGround", 10)
             provider.precip(fhour)
-        if model == "ecmwf_control":
-            convective_path = ecmwf_convective_data.archive_path(
-                data_root,
-                f"{run.init_time:%Y%m%d}",
-                run.cycle,
-            )
-            if not ecmwf_convective_data.archive_has_hours(convective_path, hours):
-                raise FileNotFoundError(convective_path)
     except Exception as exc:
         log(f"Missing {model} input fields for {run.stamp}: {exc}")
         return False
@@ -1265,7 +1342,6 @@ def plot_fourpanel(
     u10 = provider.surface(fhour, "10u", "heightAboveGround", 10)
     v10 = provider.surface(fhour, "10v", "heightAboveGround", 10)
     terrain = provider.terrain()
-    terrain_footer = ""
     if terrain is not None:
         terrain_cmap, terrain_norm, terrain_levels = make_terrain_cmap()
         terrain_land = np.where(terrain.data > 0.5, terrain.data, np.nan)
@@ -1281,7 +1357,6 @@ def plot_fourpanel(
             transform_first=True,
             zorder=1,
         )
-        terrain_footer = "Topo(brown), "
     cmap, norm, levels = make_precip_cmap()
     cf = ax.contourf(
         decimate(precip.lon, shade_stride),
@@ -1317,12 +1392,15 @@ def plot_fourpanel(
         column_density=wind_column_density,
     )
     add_watersheds(ax, watersheds)
-    plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=PRECIP_TICKS_MM, label="mm", fmt="%g")
+    if config.key == "ecmwf_control":
+        plot_style.add_fourpanel_precip_colorbar(fig, ax, cf, ticks=PRECIP_TICKS_MM, label="mm", fmt="%g")
+    else:
+        plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=PRECIP_TICKS_MM, label="mm", fmt="%g")
     precip_hours = provider.precip_interval_hours(fhour)
     add_panel_text(
         ax,
         header,
-        f"{terrain_footer}{precip_hours}h Precip(shaded,mm), MSLP(cntrd,kPa), and 10m Wind(hlf brb=10km/h)",
+        f"{precip_hours}h Precip(shaded,mm), MSLP(cntrd,kPa), and 10m Wind(hlf brb=10km/h)",
         run,
         config,
     )

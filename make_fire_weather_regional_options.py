@@ -21,12 +21,13 @@ import fire_danger_peak
 import make_hrdps_west_convective as hrdps
 import make_hrdps_west_lightning as lightning
 import plot_style
+import project_paths
 
 
 DEFAULT_STAMP = "20260715T12Z"
 DEFAULT_FHOUR = 12
 DEFAULT_REGION = "se"
-DEFAULT_OUTPUT_DIR = Path("plots/test_fire_weather_regional/options_20260715T12Z_f012_se")
+DEFAULT_OUTPUT_DIR = project_paths.plot_path("test_fire_weather_regional", "options_20260715T12Z_f012_se")
 
 DANGER_LEVELS = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
 DANGER_COLORS = ("#579dcc", "#54b35d", "#f2da32", "#ee8817", "#cf2730")
@@ -65,11 +66,10 @@ def add_base(ax: plt.Axes, extent: tuple[float, float, float, float]) -> None:
 def danger_fill(ax: plt.Axes, lon: np.ndarray, lat: np.ndarray, danger: np.ndarray):
     cmap = mcolors.ListedColormap(DANGER_COLORS, name="regional_danger")
     norm = mcolors.BoundaryNorm(DANGER_LEVELS, cmap.N)
-    smoothed = lightning.smooth_nan(danger, sigma=lightning.sigma_for_km(5.0))
     return ax.contourf(
         lon,
         lat,
-        smoothed,
+        danger,
         levels=DANGER_LEVELS,
         cmap=cmap,
         norm=norm,
@@ -81,11 +81,10 @@ def danger_fill(ax: plt.Axes, lon: np.ndarray, lat: np.ndarray, danger: np.ndarr
 
 
 def danger_contours(ax: plt.Axes, lon: np.ndarray, lat: np.ndarray, danger: np.ndarray) -> None:
-    smoothed = lightning.smooth_nan(danger, sigma=lightning.sigma_for_km(5.0))
     contours = ax.contour(
         lon,
         lat,
-        smoothed,
+        danger,
         levels=lightning.PEAK_DANGER_CONTOUR_LEVELS,
         colors=lightning.PEAK_DANGER_CONTOUR_COLORS,
         linewidths=lightning.PEAK_DANGER_CONTOUR_LINEWIDTHS,
@@ -647,6 +646,7 @@ def load_fields(run: hrdps.RunInfo, fhour: int, data_dir: Path):
     )
     if peak_grid is None:
         raise RuntimeError(f"No complete peak fire-danger grid is available for {fire_date:%Y-%m-%d}.")
+    peak_grid = lightning.prepare_peak_danger_for_plot(peak_grid, base_lat, base_lon)
     return base_lat, base_lon, fields, peak_grid.danger
 
 
@@ -655,7 +655,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stamp", default=DEFAULT_STAMP)
     parser.add_argument("--fhour", type=int, default=DEFAULT_FHOUR)
     parser.add_argument("--region", choices=sorted(lightning.FIRE_WEATHER_REGIONS), default=DEFAULT_REGION)
-    parser.add_argument("--data-dir", type=Path, default=Path("data/hrdps_west"))
+    parser.add_argument("--data-dir", type=Path, default=project_paths.data_path("hrdps_west"))
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     return parser.parse_args()
 

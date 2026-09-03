@@ -15,15 +15,21 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Mapping
 
+import telegram_notify
+
 GRAPHQL_URL = "https://api.cloudflare.com/client/v4/graphql"
 KEYCHAIN_ACCOUNT = "fcst-graphics"
 KEYCHAIN_API_TOKEN_SERVICE = "fcstGraphics-cloudflare-api-token"
 FREE_STORAGE_GB_MONTH = 10.0
 FREE_CLASS_A = 1_000_000
 FREE_CLASS_B = 10_000_000
+STORAGE_WARNING_FRACTION = 0.85
+STORAGE_CRITICAL_FRACTION = 0.98
 DEFAULT_BILLING_DAY = 20
 STATE_PATH = Path("logs/state/r2_usage_monitor.json")
 LATEST_PATH = Path("logs/r2_usage_latest.json")
+HISTORY_PATH = Path("logs/r2_usage_history.jsonl")
+HISTORY_MAX_BYTES = 5_000_000
 
 CLASS_A_ACTIONS = {
     "listbuckets",
@@ -53,7 +59,7 @@ CLASS_B_ACTIONS = {
     "getbucketcors",
     "getbucketlifecycleconfiguration",
 }
-FREE_ACTIONS = {"deleteobject", "deletebucket", "abortmultipartupload"}
+FREE_ACTIONS = {"deleteobject", "deleteobjects", "deletebucket", "abortmultipartupload"}
 
 
 @dataclass(frozen=True)
@@ -84,6 +90,7 @@ def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     )
     parser.add_argument("--state-path", type=Path, default=STATE_PATH)
     parser.add_argument("--latest-path", type=Path, default=LATEST_PATH)
+    parser.add_argument("--history-path", type=Path, default=HISTORY_PATH)
     parser.add_argument("--no-notify", action="store_true")
     parser.add_argument(
         "--always-notify",
@@ -133,7 +140,7 @@ def graphql_usage(
             filter: {datetime_geq: $startDate, datetime_leq: $endDate}
           ) {
             sum { requests }
-            dimensions { actionType }
+            dimensions { actionType bucketName }
           }
           r2StorageAdaptiveGroups(
             limit: 10000
@@ -180,22 +187,36 @@ def graphql_usage(
 def classify_operations(groups: Iterable[Mapping[str, object]]) -> dict[str, object]:
     totals = {"class_a": 0, "class_b": 0, "free": 0, "unknown": 0}
     unknown_types: dict[str, int] = {}
+    buckets: dict[str, dict[str, object]] = {}
     for group in groups:
         dimensions = group.get("dimensions", {})
         sums = group.get("sum", {})
         action = str(dimensions.get("actionType", "unknown"))
         normalized = "".join(character for character in action.lower() if character.isalnum())
         requests = int(sums.get("requests", 0) or 0)
+        bucket = str(dimensions.get("bucketName", "account-level") or "account-level")
+        bucket_totals = buckets.setdefault(
+            bucket,
+            {"class_a": 0, "class_b": 0, "free": 0, "unknown": 0, "actions": {}},
+        )
+        actions = bucket_totals["actions"]
+        if isinstance(actions, dict):
+            actions[action] = actions.get(action, 0) + requests
         if normalized in CLASS_A_ACTIONS:
             totals["class_a"] += requests
+            bucket_totals["class_a"] = int(bucket_totals["class_a"]) + requests
         elif normalized in CLASS_B_ACTIONS:
             totals["class_b"] += requests
+            bucket_totals["class_b"] = int(bucket_totals["class_b"]) + requests
         elif normalized in FREE_ACTIONS:
             totals["free"] += requests
+            bucket_totals["free"] = int(bucket_totals["free"]) + requests
         else:
             totals["unknown"] += requests
+            bucket_totals["unknown"] = int(bucket_totals["unknown"]) + requests
             unknown_types[action] = unknown_types.get(action, 0) + requests
     totals["unknown_types"] = unknown_types
+    totals["buckets"] = buckets
     return totals
 
 
@@ -241,6 +262,50 @@ def latest_storage(groups: Iterable[Mapping[str, object]]) -> dict[str, object]:
     }
 
 
+def daily_storage_peaks(groups: Iterable[Mapping[str, object]]) -> dict[str, int]:
+    """Return account-wide daily peak bytes by summing buckets at each sample time."""
+    samples: dict[str, int] = {}
+    for group in groups:
+        maximum = group.get("max", {})
+        dimensions = group.get("dimensions", {})
+        observed_at = dimensions.get("datetime")
+        if not observed_at:
+            continue
+        sample_bytes = int(maximum.get("payloadSize", 0) or 0) + int(
+            maximum.get("metadataSize", 0) or 0
+        )
+        timestamp = str(observed_at)
+        samples[timestamp] = samples.get(timestamp, 0) + sample_bytes
+    peaks: dict[str, int] = {}
+    for timestamp, sample_bytes in samples.items():
+        day = timestamp[:10]
+        peaks[day] = max(peaks.get(day, 0), sample_bytes)
+    return dict(sorted(peaks.items()))
+
+
+def projected_storage_gb_month(
+    peaks: Mapping[str, int],
+    period: BillingPeriod,
+    now: dt.datetime,
+    current_bytes: int,
+) -> tuple[float, float]:
+    """Return observed-to-date and projected full-cycle average daily peak GB."""
+    now = now.astimezone(dt.timezone.utc)
+    total_days = max(1, (period.end.date() - period.start.date()).days)
+    today = min(now.date(), period.end.date() - dt.timedelta(days=1))
+    elapsed_days = max(1, (today - period.start.date()).days + 1)
+    fallback = max(0, current_bytes)
+    observed_bytes = 0
+    for offset in range(elapsed_days):
+        day = period.start.date() + dt.timedelta(days=offset)
+        observed_bytes += int(peaks.get(day.isoformat(), fallback))
+    observed_gb = observed_bytes / elapsed_days / 1_000_000_000.0
+    future_days = max(0, total_days - elapsed_days)
+    projected_bytes = observed_bytes + future_days * fallback
+    projected_gb = projected_bytes / total_days / 1_000_000_000.0
+    return observed_gb, projected_gb
+
+
 def projected_count(observed: int, period: BillingPeriod, now: dt.datetime) -> float:
     # A one-day floor avoids treating a one-time upload burst at cycle start as
     # though it will repeat every hour for the rest of the month.
@@ -255,18 +320,34 @@ def assess_usage(
     class_b: int,
     period: BillingPeriod,
     now: dt.datetime,
+    projected_storage_gb: float | None = None,
 ) -> dict[str, object]:
     projected_a = projected_count(class_a, period, now)
     projected_b = projected_count(class_b, period, now)
     fractions = {
         "storage": storage_gb / FREE_STORAGE_GB_MONTH,
+        "storage_projected": (
+            projected_storage_gb if projected_storage_gb is not None else storage_gb
+        )
+        / FREE_STORAGE_GB_MONTH,
         "class_a_current": class_a / FREE_CLASS_A,
         "class_a_projected": projected_a / FREE_CLASS_A,
         "class_b_current": class_b / FREE_CLASS_B,
         "class_b_projected": projected_b / FREE_CLASS_B,
     }
-    highest = max(fractions.values())
-    level = "critical" if highest >= 0.90 else "warning" if highest >= 0.70 else "ok"
+    operations_highest = max(
+        fractions["class_a_current"],
+        fractions["class_a_projected"],
+        fractions["class_b_current"],
+        fractions["class_b_projected"],
+    )
+    storage_highest = max(fractions["storage"], fractions["storage_projected"])
+    if storage_highest >= STORAGE_CRITICAL_FRACTION or operations_highest >= 0.90:
+        level = "critical"
+    elif storage_highest >= STORAGE_WARNING_FRACTION or operations_highest >= 0.70:
+        level = "warning"
+    else:
+        level = "ok"
     return {
         "level": level,
         "fractions": fractions,
@@ -276,6 +357,9 @@ def assess_usage(
 
 
 def notify(message: str) -> bool:
+    if telegram_notify.configured():
+        telegram_notify.send_message("R2 Free-Tier Monitor", message)
+        return True
     escaped = message.replace("\\", "\\\\").replace('"', '\\"')
     result = subprocess.run(
         [
@@ -304,6 +388,16 @@ def write_json(path: Path, payload: Mapping[str, object]) -> None:
     temporary.replace(path)
 
 
+def append_history(path: Path, payload: Mapping[str, object]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists() and path.stat().st_size >= HISTORY_MAX_BYTES:
+        rotated = path.with_suffix(path.suffix + ".1")
+        rotated.unlink(missing_ok=True)
+        path.replace(rotated)
+    with path.open("a") as handle:
+        handle.write(json.dumps(payload, separators=(",", ":")) + "\n")
+
+
 def should_notify(level: str, state: Mapping[str, object], now: dt.datetime) -> bool:
     if level == "ok":
         return False
@@ -314,6 +408,36 @@ def should_notify(level: str, state: Mapping[str, object], now: dt.datetime) -> 
     except (KeyError, ValueError):
         return True
     return now - previous >= dt.timedelta(hours=24)
+
+
+def bucket_summary(storage: Mapping[str, object]) -> str:
+    buckets = storage.get("buckets", {})
+    if not isinstance(buckets, Mapping):
+        return ""
+    parts = []
+    for name, values in sorted(buckets.items()):
+        if not isinstance(values, Mapping):
+            continue
+        total = int(values.get("payload_bytes", 0) or 0) + int(
+            values.get("metadata_bytes", 0) or 0
+        )
+        parts.append(f"{name} {total / 1_000_000_000:.2f} GB")
+    return "; ".join(parts)
+
+
+def operation_bucket_summary(operations: Mapping[str, object]) -> str:
+    buckets = operations.get("buckets", {})
+    if not isinstance(buckets, Mapping):
+        return ""
+    parts = []
+    for name, values in sorted(buckets.items()):
+        if not isinstance(values, Mapping):
+            continue
+        class_a = int(values.get("class_a", 0) or 0)
+        class_b = int(values.get("class_b", 0) or 0)
+        if class_a or class_b:
+            parts.append(f"{name} A {class_a:,}, B {class_b:,}")
+    return "; ".join(parts)
 
 
 def main(argv: Iterable[str]) -> int:
@@ -337,12 +461,20 @@ def main(argv: Iterable[str]) -> int:
         conservative_a = int(operations["class_a"]) + int(operations["unknown"])
         storage_bytes = int(storage["payload_bytes"]) + int(storage["metadata_bytes"])
         storage_gb = storage_bytes / 1_000_000_000.0
+        storage_peaks = daily_storage_peaks(usage["storage"])
+        observed_storage_gb, projected_storage_gb = projected_storage_gb_month(
+            storage_peaks,
+            period,
+            now,
+            storage_bytes,
+        )
         assessment = assess_usage(
             storage_gb,
             conservative_a,
             int(operations["class_b"]),
             period,
             now,
+            projected_storage_gb,
         )
         payload = {
             "checked_at": now.isoformat().replace("+00:00", "Z"),
@@ -353,6 +485,9 @@ def main(argv: Iterable[str]) -> int:
             "storage_payload_bytes": storage["payload_bytes"],
             "storage_metadata_bytes": storage["metadata_bytes"],
             "storage_gb": round(storage_gb, 4),
+            "observed_storage_gb_month": round(observed_storage_gb, 4),
+            "projected_storage_gb_month": round(projected_storage_gb, 4),
+            "daily_storage_peak_bytes": storage_peaks,
             "object_count": storage["object_count"],
             "pending_uploads": storage["pending_uploads"],
             "storage_observed_at": storage["observed_at"],
@@ -367,9 +502,16 @@ def main(argv: Iterable[str]) -> int:
         summary_prefix = "R2 weekly report" if args.always_notify else f"R2 {assessment['level']}"
         summary = (
             f"{summary_prefix}: storage {storage_gb:.2f}/10 GB; "
+            f"projected billing average {projected_storage_gb:.2f}/10 GB-month; "
             f"projected Class A {fractions['class_a_projected']:.1%}; "
             f"projected Class B {fractions['class_b_projected']:.1%}."
         )
+        by_bucket = bucket_summary(storage)
+        if by_bucket:
+            summary += f" Buckets: {by_bucket}."
+        operation_buckets = operation_bucket_summary(operations)
+        if operation_buckets and assessment["level"] != "ok":
+            summary += f" Cycle operations: {operation_buckets}."
         print(summary, flush=True)
         notified = False
         if not args.no_notify and (
@@ -385,10 +527,15 @@ def main(argv: Iterable[str]) -> int:
             ),
         }
         write_json(args.state_path, new_state)
+        append_history(args.history_path, payload)
         return 0
     except Exception as exc:
         failures = int(state.get("consecutive_failures", 0)) + 1
-        message = f"R2 usage check failed ({failures} consecutive): {exc}"
+        message = (
+            f"R2 usage check failed ({failures} consecutive): {exc}. "
+            "Forecast graphics are not known to be affected, but the free-tier "
+            "cost guardrail cannot currently measure storage or request usage."
+        )
         print(message, flush=True)
         notified = (
             (args.always_notify or failures == 3)

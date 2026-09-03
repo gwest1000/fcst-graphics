@@ -19,6 +19,8 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import numpy as np
 
+import project_paths
+
 from make_hrdps_west_convective import (
     EXTENT,
     FORECAST_HOURS,
@@ -75,7 +77,7 @@ PARAM_RANGES = {
 def parse_args(argv: Iterable[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", default="20260629T12Z", help="Run stamp, e.g. 20260629T12Z.")
-    parser.add_argument("--data-dir", type=Path, default=Path("data/hrdps_west"))
+    parser.add_argument("--data-dir", type=Path, default=project_paths.data_path("hrdps_west"))
     parser.add_argument("--output-dir", type=Path, default=Path("analysis/pcge_sensitivity"))
     parser.add_argument("--stride", type=int, default=18)
     parser.add_argument("--random-samples", type=int, default=6000)

@@ -54,9 +54,14 @@ class FireActivityOverlayTests(unittest.TestCase):
         self.assertEqual(manifest["observationCount"], 4)
         self.assertEqual(set(manifest["products"]), set(versions))
         self.assertTrue(
-            manifest["products"]["lightning_sw"]["image"].endswith("/live/fire_activity/lightning_sw.png")
+            manifest["products"]["continental_lightning_twopanel"]["image"].endswith(
+                "/live/fire_activity/continental_lightning_twopanel.png"
+            )
         )
-        self.assertEqual(manifest["products"]["lightning_sw"]["minimumRunStamp"], "20260721T12Z")
+        self.assertEqual(
+            manifest["products"]["continental_lightning_twopanel"]["minimumRunStamp"],
+            "20260722T12Z",
+        )
 
     def test_unavailable_manifest_clears_products(self):
         config = R2Config("account", "access", "secret", "bucket", "https://example.r2.dev")
@@ -69,10 +74,10 @@ class FireActivityOverlayTests(unittest.TestCase):
     def test_state_write_is_atomic_and_readable(self):
         with TemporaryDirectory() as tmpdir:
             path = Path(tmpdir) / "state.json"
-            overlay.write_state({"versions": {"lightning_sw": "abc"}}, path)
+            overlay.write_state({"versions": {"continental_lightning_twopanel": "abc"}}, path)
 
-            self.assertEqual(overlay.read_state(path)["versions"]["lightning_sw"], "abc")
-            self.assertEqual(json.loads(path.read_text())["versions"]["lightning_sw"], "abc")
+            self.assertEqual(overlay.read_state(path)["versions"]["continental_lightning_twopanel"], "abc")
+            self.assertEqual(json.loads(path.read_text())["versions"]["continental_lightning_twopanel"], "abc")
 
     def test_second_publish_skips_unchanged_pngs_but_updates_manifest(self):
         class FakeClient:
@@ -103,9 +108,9 @@ class FireActivityOverlayTests(unittest.TestCase):
                 client=client,
             )
 
-        self.assertEqual(first["uploaded"], 4)
+        self.assertEqual(first["uploaded"], 1)
         self.assertEqual(second["uploaded"], 0)
-        self.assertEqual(second["unchanged"], 4)
+        self.assertEqual(second["unchanged"], 1)
         self.assertEqual(sum(key == overlay.MANIFEST_KEY for key, _ in client.puts), 2)
 
     def test_site_layers_live_fires_only_over_latest_products(self):

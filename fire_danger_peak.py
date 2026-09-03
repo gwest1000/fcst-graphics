@@ -16,7 +16,9 @@ import fwi2025
 
 FIRE_DAY_RESET_HOUR = 5
 PEAK_GUIDANCE_MIN_LOCAL_HOUR = 17
-PEAK_CACHE_VERSION = 1
+PEAK_DANGER_SMOOTHING_KM = 5.0
+MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS = 48
+PEAK_CACHE_VERSION = 2
 
 
 @dataclass(frozen=True)
@@ -46,6 +48,7 @@ class PeakDangerGrid:
     fire_date: dt.date
     source_run_stamp: str
     source_init_utc: dt.datetime
+    anchor_time_utc: dt.datetime
     fwi: np.ndarray
     bui: np.ndarray
     danger: np.ndarray
@@ -255,6 +258,7 @@ def save_peak_danger_grid(
     run_init_utc: dt.datetime,
     day: PeakBurnDay,
     danger: np.ndarray,
+    anchor_time_utc: dt.datetime | None = None,
     allow_partial: bool = False,
 ) -> Path:
     if not day.complete and not allow_partial:
@@ -266,6 +270,7 @@ def save_peak_danger_grid(
             f"{PEAK_GUIDANCE_MIN_LOCAL_HOUR:02d}:00 local."
         )
     path = peak_cache_path(cache_dir, model_key, day.fire_date, run_stamp)
+    anchor_time_utc = anchor_time_utc or run_init_utc
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = path.with_suffix(path.suffix + f".{os.getpid()}.tmp")
     danger_u8 = np.where(np.isfinite(danger), danger, 0).astype(np.uint8)
@@ -277,6 +282,7 @@ def save_peak_danger_grid(
                 model_key=np.asarray(model_key),
                 run_stamp=np.asarray(run_stamp),
                 run_init_utc=np.asarray(run_init_utc.isoformat()),
+                anchor_time_utc=np.asarray(anchor_time_utc.isoformat()),
                 fire_date=np.asarray(day.fire_date.isoformat()),
                 hour_count=np.asarray([day.hour_count], dtype=np.int8),
                 complete=np.asarray([day.complete], dtype=np.bool_),
@@ -321,6 +327,9 @@ def load_peak_danger_grid(
                     source_init = source_init.replace(tzinfo=dt.timezone.utc)
                 if source_init > as_of_utc:
                     continue
+                anchor_time = dt.datetime.fromisoformat(str(data["anchor_time_utc"]))
+                if anchor_time.tzinfo is None:
+                    anchor_time = anchor_time.replace(tzinfo=dt.timezone.utc)
                 fwi = data["fwi"].astype(np.float32)
                 bui = data["bui"].astype(np.float32)
                 danger_u8 = data["danger"].astype(np.uint8)
@@ -341,6 +350,7 @@ def load_peak_danger_grid(
                         fire_date=dt.date.fromisoformat(str(data["fire_date"])),
                         source_run_stamp=str(data["run_stamp"]),
                         source_init_utc=source_init,
+                        anchor_time_utc=anchor_time,
                         fwi=fwi,
                         bui=bui,
                         danger=np.where(danger_u8 > 0, danger_u8, np.nan).astype(np.float32),
@@ -353,6 +363,20 @@ def load_peak_danger_grid(
         except (OSError, KeyError, ValueError):
             continue
     return max(candidates, key=lambda item: item.source_init_utc, default=None)
+
+
+def guidance_anchor_is_eligible_for_run(
+    guidance: PeakDangerGrid,
+    run_init_utc: dt.datetime,
+    max_age_hours: int = MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS,
+) -> bool:
+    """Return whether a CWFIS anchor may initialize this model run.
+
+    Once accepted, the anchor remains valid throughout that run's forecast period.
+    """
+
+    age_hours = (run_init_utc - guidance.anchor_time_utc).total_seconds() / 3600.0
+    return 0.0 <= age_hours <= max_age_hours
 
 
 def load_peak_danger_for_display(

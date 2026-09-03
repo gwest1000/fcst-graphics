@@ -889,11 +889,11 @@ def plot_fourpanel(
     label_contours(high_mslp, fontsize=5.8, fmt="%.1f", colors=MSLP_BLUE)
     plot_barbs(ax, plot_lon, plot_lat, u10, v10, barb_stride, color="black", row_density=2.0, column_density=2.0)
     add_watersheds(ax, watersheds)
-    plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=PRECIP_TICKS_MM, label="mm", fmt="%g")
+    plot_style.add_fourpanel_precip_colorbar(fig, ax, cf, ticks=PRECIP_TICKS_MM, label="mm", fmt="%g")
     plot_style.add_fourpanel_text(
         ax,
         header,
-        "Topo(brown), 3h Precip(shaded,mm), MSLP(cntrd,kPa), 10m Wind(hlf brb=10km/h)",
+        "3h Precip(shaded,mm), MSLP(cntrd,kPa), 10m Wind(hlf brb=10km/h)",
         run,
     )
 

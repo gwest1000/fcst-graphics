@@ -27,6 +27,7 @@ import fire_activity
 import make_hrdps_west_convective as hrdps
 import make_hrdps_west_lightning as lightning
 import plot_style
+import project_paths
 
 
 DEFAULT_MODEL = "continental"
@@ -75,6 +76,7 @@ DANGER_LEVELS = (0.5, 1.5, 2.5, 3.5, 4.5, 5.5)
 DANGER_COLORS = ("#579dcc", "#54b35d", "#f2da32", "#ee8817", "#cf2730")
 DANGER_TICKS = (1, 2, 3, 4, 5)
 DANGER_TICK_LABELS = ("VL", "L", "M", "H", "E")
+CWFIS_UNAVAILABLE_LABEL = "CWFIS fire danger not available"
 RH_LEVELS = (-0.1, 20.0, 30.0, 60.0, 80.0, 100.1)
 RH_FILL_COLORS = (
     mcolors.to_rgba("#743b16", 0.48),
@@ -102,6 +104,8 @@ REGIONAL_VECTOR_BOLD_MULTIPLIER = VECTOR_BOLD_MULTIPLIER * 1.25
 REGIONAL_DRY_LIGHTNING_DENSITY_MULTIPLIER = 1.5 * 1.25
 REGIONAL_DRY_LIGHTNING_AREA_MULTIPLIER = 1.25
 DRY_LIGHTNING_AREA_MULTIPLIER = 1.25
+DRY_LIGHTNING_LOW_LPI_COLOR = "#747474"
+DRY_LIGHTNING_LPI_COLOR_SPLIT = 60.0
 PRECIP_DOT_GRID_KM = 12.0
 PRECIP_DOT_MODERATE_MM = 2.5
 PRECIP_DOT_HEAVY_MM = 10.0
@@ -341,16 +345,26 @@ def fire_activity_source(activity: fire_activity.FireActivity | None) -> str:
     return "ECCC HRDPS/CWFIS 24-H HOTSPOTS"
 
 
+def figure_source_label(
+    run: hrdps.RunInfo,
+    activity: fire_activity.FireActivity | None,
+) -> str:
+    source = fire_activity_source(activity)
+    return f"{source} | INIT {run.init_time:%Y%m%d%H}Z"
+
+
 def edge_panel_footers(
     fhour: int,
     activity: fire_activity.FireActivity | None = None,
 ) -> tuple[str, str]:
     period = period_hazard_label(fhour)
+    lightning_period = period.replace(" max", "")
     fire_label = fire_activity_footer(activity)
     fire_suffix = f" | {fire_label}" if fire_label else ""
     return (
-        f"RH <30% brown / >60% blue | {period} gust | Transmission grey",
-        f"Danger | {period} LPI/dry lightning * | Rain 2.5/10{fire_suffix}",
+        f"RH <30/20% brown / >60/80% blue | {period} gust",
+        f"Fcst fire danger | {lightning_period} Ltg cntrd | Dry Ltg * | "
+        f"Rain:blue dots 2.5/10 mm{fire_suffix}",
     )
 
 
@@ -418,13 +432,12 @@ def plot_peak_danger_fill(
     lat: np.ndarray,
     danger: np.ndarray,
 ) -> object:
-    danger_s = lightning.smooth_nan(danger, sigma=lightning.sigma_for_km(5.0))
     cmap = mcolors.ListedColormap(DANGER_COLORS, name="fire_weather_danger")
     norm = mcolors.BoundaryNorm(DANGER_LEVELS, cmap.N)
     return ax.contourf(
         lon,
         lat,
-        danger_s,
+        danger,
         levels=DANGER_LEVELS,
         cmap=cmap,
         norm=norm,
@@ -471,7 +484,10 @@ def plot_lpi_contours(
     lat: np.ndarray,
     potential: np.ndarray,
 ) -> None:
-    potential_s = lightning.smooth_nan(potential, sigma=lightning.sigma_for_km(5.0))
+    potential_s = lightning.smooth_nan(
+        potential,
+        sigma=lightning.sigma_for_km(lightning.lpi_display_smoothing_km()),
+    )
     ax.contour(
         lon,
         lat,
@@ -592,28 +608,36 @@ def add_regional_dry_lightning(
     lon: np.ndarray,
     lat: np.ndarray,
     dry_potential: np.ndarray,
+    lpi: np.ndarray,
     stride: int,
     region_key: str,
 ) -> None:
     sample = (slice(None, None, stride), slice(None, None, stride))
     sampled_dry = dry_potential[sample]
-    mask = sampled_dry >= 15.0
-    if not np.any(mask):
-        return
-    ax.scatter(
-        lon[sample][mask],
-        lat[sample][mask],
-        marker=lightning.DRY_LIGHTNING_MARKER,
-        s=(
-            lightning.dry_lightning_marker_area(region_key)
-            * REGIONAL_DRY_LIGHTNING_AREA_MULTIPLIER
-            * DRY_LIGHTNING_AREA_MULTIPLIER
-        ),
-        color=lightning.DRY_LIGHTNING_COLOR,
-        linewidths=0.40,
-        transform=lightning.DATA_CRS,
-        zorder=14,
+    low_lpi, high_lpi = dry_lightning_marker_masks(
+        sampled_dry,
+        lpi[sample],
+        DRY_LIGHTNING_LPI_COLOR_SPLIT,
     )
+    for mask, color in (
+        (low_lpi, DRY_LIGHTNING_LOW_LPI_COLOR),
+        (high_lpi, lightning.DRY_LIGHTNING_COLOR),
+    ):
+        if np.any(mask):
+            ax.scatter(
+                lon[sample][mask],
+                lat[sample][mask],
+                marker=lightning.DRY_LIGHTNING_MARKER,
+                s=(
+                    lightning.dry_lightning_marker_area(region_key)
+                    * REGIONAL_DRY_LIGHTNING_AREA_MULTIPLIER
+                    * DRY_LIGHTNING_AREA_MULTIPLIER
+                ),
+                color=color,
+                linewidths=0.40,
+                transform=lightning.DATA_CRS,
+                zorder=14,
+            )
 
 
 def regional_colorbar_layout(region_key: str) -> dict[str, object]:
@@ -636,6 +660,31 @@ def regional_colorbar_layout(region_key: str) -> dict[str, object]:
     raise ValueError(f"Unsupported regional colorbar placement: {region_key}")
 
 
+def dry_lightning_marker_masks(
+    dry_potential: np.ndarray,
+    lpi: np.ndarray,
+    lpi_split: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    eligible = dry_potential >= lightning.DRY_LIGHTNING_DISPLAY_THRESHOLD
+    return eligible & (lpi < lpi_split), eligible & (lpi >= lpi_split)
+
+
+def add_cwfis_unavailable_label(ax: plt.Axes) -> None:
+    ax.text(
+        0.5,
+        0.965,
+        CWFIS_UNAVAILABLE_LABEL,
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        fontsize=8.0,
+        fontweight="bold",
+        color="#222222",
+        bbox={"facecolor": "white", "edgecolor": "#666666", "linewidth": 0.6, "pad": 2.5},
+        zorder=50,
+    )
+
+
 def plot_twopanel(
     out_path: Path,
     run: hrdps.RunInfo,
@@ -650,6 +699,7 @@ def plot_twopanel(
     watersheds: list[BaseGeometry] | None = None,
     edge_bands: bool = True,
     fire_observations: fire_activity.FireActivity | None = None,
+    dry_lightning_lpi_split: float | None = DRY_LIGHTNING_LPI_COLOR_SPLIT,
 ) -> Path:
     """Render one frame from diagnostics already computed for the single panel."""
     yslice, xslice = hrdps.subset_slices(lat, lon, DATA_EXTENT)
@@ -685,21 +735,42 @@ def plot_twopanel(
                 plot_lat,
                 peak_danger_grid.danger[yslice, xslice],
             )
+        else:
+            add_cwfis_unavailable_label(lpi_ax)
         plot_precipitation_dots(lpi_ax, plot_lon, plot_lat, plot_fields.precip_3h)
         plot_lpi_contours(lpi_ax, plot_lon, plot_lat, plot_fields.potential)
         dry_star_stride = max(contour_stride, shade_stride * 2)
-        star_mask = plot_fields.dry_potential[::dry_star_stride, ::dry_star_stride] >= 15.0
-        if np.any(star_mask):
-            lpi_ax.scatter(
-                plot_lon[::dry_star_stride, ::dry_star_stride][star_mask],
-                plot_lat[::dry_star_stride, ::dry_star_stride][star_mask],
-                marker=lightning.DRY_LIGHTNING_MARKER,
-                s=lightning.dry_lightning_marker_area("bc") * DRY_LIGHTNING_AREA_MULTIPLIER,
-                color=lightning.DRY_LIGHTNING_COLOR,
-                linewidths=0.45,
-                transform=lightning.DATA_CRS,
-                zorder=14,
+        sampled_dry = plot_fields.dry_potential[::dry_star_stride, ::dry_star_stride]
+        sampled_lpi = plot_fields.potential[::dry_star_stride, ::dry_star_stride]
+        if dry_lightning_lpi_split is None:
+            marker_groups = ((
+                sampled_dry >= lightning.DRY_LIGHTNING_DISPLAY_THRESHOLD,
+                lightning.DRY_LIGHTNING_COLOR,
+            ),)
+        else:
+            low_lpi, high_lpi = dry_lightning_marker_masks(
+                sampled_dry,
+                sampled_lpi,
+                dry_lightning_lpi_split,
             )
+            marker_groups = (
+                (low_lpi, DRY_LIGHTNING_LOW_LPI_COLOR),
+                (high_lpi, lightning.DRY_LIGHTNING_COLOR),
+            )
+        sampled_lon = plot_lon[::dry_star_stride, ::dry_star_stride]
+        sampled_lat = plot_lat[::dry_star_stride, ::dry_star_stride]
+        for star_mask, marker_color in marker_groups:
+            if np.any(star_mask):
+                lpi_ax.scatter(
+                    sampled_lon[star_mask],
+                    sampled_lat[star_mask],
+                    marker=lightning.DRY_LIGHTNING_MARKER,
+                    s=lightning.dry_lightning_marker_area("bc") * DRY_LIGHTNING_AREA_MULTIPLIER,
+                    color=marker_color,
+                    linewidths=0.45,
+                    transform=lightning.DATA_CRS,
+                    zorder=14,
+                )
     for ax in (rh_ax, lpi_ax):
         lightning.add_transmission_lines(ax, transmission_lines)
         hrdps.add_city_labels(ax, fontsize=6.5, marker_size=2.0, path_width=2.2, zorder=30)
@@ -760,7 +831,7 @@ def plot_twopanel(
             f"{hrdps.model_config().label} FIRE WEATHER  |  "
             f"{valid_local:%a %H:%M%Z %d%b%Y}  |  {valid:%H:%MUTC %d%b%Y}"
         ).upper(),
-        f"{fire_activity_source(fire_observations)} | INIT {run.init_time:%Y%m%d%H}Z",
+        figure_source_label(run, fire_observations),
         source_fontsize=6.4,
         edge_bands=edge_bands,
     )
@@ -822,6 +893,8 @@ def plot_regional_twopanel(
         warnings.simplefilter("ignore")
         if peak_danger is not None:
             danger_fill = plot_peak_danger_fill(danger_ax, plot_lon, plot_lat, peak_danger)
+        else:
+            add_cwfis_unavailable_label(danger_ax)
         plot_precipitation_dots(
             danger_ax,
             plot_lon,
@@ -840,6 +913,7 @@ def plot_regional_twopanel(
             plot_lon,
             plot_lat,
             fields.dry_potential,
+            fields.potential,
             dry_stride,
             region_key,
         )
@@ -905,7 +979,7 @@ def plot_regional_twopanel(
             f"{hrdps.model_config().label} {region_label} FIRE WEATHER  |  "
             f"{valid_local:%a %H:%M%Z %d%b%Y}  |  {valid:%H:%MUTC %d%b%Y}"
         ).upper(),
-        f"{fire_activity_source(fire_observations)} | INIT {run.init_time:%Y%m%d%H}Z",
+        figure_source_label(run, fire_observations),
         source_fontsize=5.8,
         source_pad=0.06,
         edge_bands=edge_bands,
@@ -918,7 +992,14 @@ def plot_regional_twopanel(
     return out_path
 
 
-def render_twopanel(run: hrdps.RunInfo, fhour: int, data_dir: Path, out_path: Path) -> Path:
+def render_twopanel(
+    run: hrdps.RunInfo,
+    fhour: int,
+    data_dir: Path,
+    out_path: Path,
+    dry_lpi_gate: float = lightning.DRY_LIGHTNING_MIN_LPI,
+    dry_lightning_lpi_split: float | None = DRY_LIGHTNING_LPI_COLOR_SPLIT,
+) -> Path:
     """Standalone wrapper used for manual regeneration and layout checks."""
     run_dir = data_dir / run.stamp
     shade_stride = hrdps.grid_stride(5.0)
@@ -949,6 +1030,7 @@ def render_twopanel(run: hrdps.RunInfo, fhour: int, data_dir: Path, out_path: Pa
         lon,
         terrain_m,
         dcape_stride,
+        dry_lpi_gate=dry_lpi_gate,
     )
     valid = run.init_time + dt.timedelta(hours=fhour)
     fire_date = fire_danger_peak.fire_date_for_valid(valid, plot_style.LOCAL_TZ)
@@ -959,6 +1041,21 @@ def render_twopanel(run: hrdps.RunInfo, fhour: int, data_dir: Path, out_path: Pa
         run.init_time,
         base_lat.shape,
     )
+    if peak_danger_grid is not None and not fire_danger_peak.guidance_anchor_is_eligible_for_run(
+        peak_danger_grid,
+        run.init_time,
+    ):
+        lightning.log(
+            f"CWFIS anchor exceeds {fire_danger_peak.MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS} h "
+            f"at {run.stamp} initialization; suppressing fire-danger guidance for this run."
+        )
+        peak_danger_grid = None
+    if peak_danger_grid is not None:
+        peak_danger_grid = lightning.prepare_peak_danger_for_plot(
+            peak_danger_grid,
+            base_lat,
+            base_lon,
+        )
     transmission_lines = lightning.load_transmission_lines()
     return plot_twopanel(
         out_path,
@@ -972,6 +1069,7 @@ def render_twopanel(run: hrdps.RunInfo, fhour: int, data_dir: Path, out_path: Pa
         contour_stride,
         peak_danger_grid,
         None,
+        dry_lightning_lpi_split=dry_lightning_lpi_split,
     )
 
 
@@ -982,10 +1080,23 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--fhour", type=int, default=DEFAULT_FHOUR)
     parser.add_argument("--data-dir", type=Path, default=None)
     parser.add_argument(
+        "--dry-lpi-gate",
+        type=float,
+        default=lightning.DRY_LIGHTNING_MIN_LPI,
+        help="Minimum LPI allowed into the dry-lightning diagnostic.",
+    )
+    parser.add_argument(
+        "--dry-lightning-lpi-split",
+        type=float,
+        default=DRY_LIGHTNING_LPI_COLOR_SPLIT,
+        help="Render lower-LPI dry markers grey and markers at/above this LPI black.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
-        default=Path(
-            f"plots/test_fire_weather_twopanel/{OUTPUT_PREFIX}_{DEFAULT_STAMP}_f{DEFAULT_FHOUR:03d}.png"
+        default=project_paths.plot_path(
+            "test_fire_weather_twopanel",
+            f"{OUTPUT_PREFIX}_{DEFAULT_STAMP}_f{DEFAULT_FHOUR:03d}.png",
         ),
     )
     return parser.parse_args()
@@ -1000,7 +1111,14 @@ def main() -> int:
         init_time=hrdps.parse_stamp(args.stamp),
     )
     data_dir = args.data_dir or Path(hrdps.model_config().default_data_dir)
-    render_twopanel(run, args.fhour, data_dir, args.output)
+    render_twopanel(
+        run,
+        args.fhour,
+        data_dir,
+        args.output,
+        dry_lpi_gate=args.dry_lpi_gate,
+        dry_lightning_lpi_split=args.dry_lightning_lpi_split,
+    )
     return 0
 
 

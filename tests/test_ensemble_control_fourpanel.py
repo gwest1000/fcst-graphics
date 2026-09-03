@@ -3,6 +3,7 @@ from __future__ import annotations
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from unittest import mock
 
 import numpy as np
 
@@ -62,11 +63,11 @@ class EnsembleControlFourPanelTest(unittest.TestCase):
 
         np.testing.assert_allclose(precip.data, 6.0, atol=1.0e-5)
 
-    def test_ecmwf_forecast_schedule_reaches_ten_and_a_half_days(self) -> None:
+    def test_ecmwf_forecast_schedule_reaches_fifteen_days(self) -> None:
         hours = ensemble.model_hours("ecmwf_control")
 
         self.assertEqual(hours[0], 0)
-        self.assertEqual(hours[-1], 252)
+        self.assertEqual(hours[-1], 360)
         self.assertIn(144, hours)
         self.assertIn(150, hours)
         self.assertNotIn(147, hours)
@@ -80,7 +81,7 @@ class EnsembleControlFourPanelTest(unittest.TestCase):
 
         np.testing.assert_allclose(terrain.data, 2.0)
 
-    def test_ecmwf_source_stamp_is_concise_and_omits_init(self) -> None:
+    def test_ecmwf_source_stamp_includes_initialization(self) -> None:
         self.assertEqual(ensemble.MODEL_CONFIGS["ecmwf_control"].source_label, "ECMWF")
         run = ensemble.RunInfo(
             cycle="00",
@@ -90,7 +91,32 @@ class EnsembleControlFourPanelTest(unittest.TestCase):
 
         source = ensemble.panel_source_text(run, ensemble.MODEL_CONFIGS["ecmwf_control"])
 
-        self.assertEqual(source, "Data: ECMWF")
+        self.assertEqual(source, "Data: ECMWF | Init:2026080700")
+        self.assertEqual(ensemble.MODEL_CONFIGS["ecmwf_control"].label, "ECMWF Ctl")
+
+    def test_ecmwf_preflight_builds_one_inventory_for_all_hours(self) -> None:
+        pressure, surface = ensemble.required_ecmwf_grib_keys((0, 360))
+
+        self.assertIn(("gh", "isobaricInhPa", 500, 360), pressure)
+        self.assertIn(("r", "isobaricInhPa", 925, 0), pressure)
+        self.assertIn(("2d", "heightAboveGround", 2, 360), surface)
+        self.assertIn(("tp", "surface", 0, 0), surface)
+
+    def test_incomplete_convective_archive_skips_large_grib_scan(self) -> None:
+        run = ensemble.RunInfo(
+            cycle="12",
+            stamp="20260820T12Z",
+            init_time=ensemble.parse_stamp("20260820T12Z"),
+        )
+        with (
+            mock.patch.object(ensemble, "provider_for"),
+            mock.patch.object(ensemble.ecmwf_convective_data, "archive_has_hours", return_value=False),
+            mock.patch.object(ensemble, "grib_inventory") as inventory,
+        ):
+            self.assertFalse(
+                ensemble.required_files_present("ecmwf_control", Path("/data"), run, (0, 360))
+            )
+        inventory.assert_not_called()
 
     def test_ecmwf_vector_density_is_25_percent_above_gefs(self) -> None:
         gefs = ensemble.MODEL_CONFIGS["gefs_control"]

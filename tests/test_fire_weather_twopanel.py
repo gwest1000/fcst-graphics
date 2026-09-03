@@ -31,42 +31,17 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
 
         self.assertNotEqual(original, updated)
 
-    def test_product_is_operational_for_continental_and_west_regions(self):
+    def test_only_continental_fire_weather_is_operational(self):
         self.assertIn("continental_lightning_twopanel", publisher.PRODUCTS_BY_MODEL["continental"])
+        self.assertNotIn("west", publisher.PRODUCTS_BY_MODEL)
+        self.assertNotIn("west", r2_publish.MODEL_PRODUCTS)
         self.assertNotIn("continental_lightning", publisher.PRODUCTS)
         self.assertNotIn("continental_convective", publisher.PRODUCTS)
         self.assertNotIn("convective", publisher.PRODUCTS)
         self.assertNotIn("lightning", publisher.PRODUCTS)
-        self.assertEqual(
-            set(automation.lightning_product_keys("west")),
-            {"lightning_sw", "lightning_se", "lightning_ne", "wind_south_coast"},
-        )
-        for key in automation.lightning_product_keys("west"):
-            self.assertIn(publisher.PRODUCTS[key].plot_type, {"Fire Weather", "10 m Wind"})
-
-    def test_wind_product_uses_fire_weather_density_and_shared_palette(self):
-        product = publisher.PRODUCTS["wind_south_coast"]
-
-        self.assertEqual(product.prefix, wind.OUTPUT_PREFIX)
-        self.assertEqual(product.area, "South Coast")
-        self.assertEqual(product.model, "HRDPS-West 1 km")
-        self.assertEqual(
-            wind.ROW_DENSITY_MULTIPLIER,
-            twopanel.REGIONAL_VECTOR_ROW_DENSITY_MULTIPLIER * 1.50,
-        )
-        self.assertEqual(
-            wind.COLUMN_DENSITY_MULTIPLIER,
-            twopanel.REGIONAL_VECTOR_COLUMN_DENSITY_MULTIPLIER,
-        )
-        self.assertGreater(np.ptp(wind.OUTER_ARROW_SHAPE[:, 1]), np.ptp(wind.INNER_ARROW_SHAPE[:, 1]))
-        self.assertIn("wind_south_coast", publisher.PRODUCTS_BY_MODEL["west"])
-        self.assertIn("wind_south_coast", r2_publish.MODEL_PRODUCTS["west"])
-        self.assertIn("wind_sw", r2_publish.RETIRED_PRODUCTS["west"])
-
         site_html = (Path(__file__).parents[1] / "site" / "index.html").read_text()
-        self.assertIn('data-plot-toggle="wind"', site_html)
-        self.assertIn('data-area-toggle="wind_south_coast"', site_html)
-        self.assertIn('data-product-select="wind_south_coast"', site_html)
+        self.assertNotIn("HRDPS-West", site_html)
+        self.assertNotIn('data-product-select="wind_south_coast"', site_html)
 
     def test_wind_colorbar_is_narrower_and_fifty_percent_taller(self):
         self.assertEqual(wind.COLORBAR_LAYOUT["backdrop"], (0.001, 0.028, 0.070, 0.632))
@@ -144,6 +119,15 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         self.assertNotIn(twopanel.PRECIP_DOT_HEAVY_COLOR, twopanel.DANGER_COLORS)
         self.assertNotEqual(twopanel.PRECIP_DOT_HEAVY_COLOR, twopanel.lightning.DRY_LIGHTNING_COLOR)
 
+    def test_dry_lightning_markers_split_at_requested_lpi(self):
+        dry = np.array([14.9, 15.0, 20.0, 80.0], dtype=np.float32)
+        lpi = np.array([80.0, 20.0, 59.9, 60.0], dtype=np.float32)
+
+        grey, black = twopanel.dry_lightning_marker_masks(dry, lpi, 60.0)
+
+        np.testing.assert_array_equal(grey, [False, True, True, False])
+        np.testing.assert_array_equal(black, [False, False, False, True])
+
     def test_regional_colorbars_touch_requested_upper_corners(self):
         for key in ("sw", "ne"):
             layout = twopanel.regional_colorbar_layout(key)
@@ -172,10 +156,29 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
 
         self.assertIn("brown", left)
         self.assertIn("3-h max gust", left)
-        self.assertIn("Danger", right)
-        self.assertIn("dry lightning", right)
+        self.assertIn("fire danger", right)
+        self.assertIn("Dry Ltg", right)
         self.assertNotEqual(left, left.upper())
         self.assertNotEqual(right, right.upper())
+
+    def test_missing_cwfis_guidance_gets_visible_panel_label(self):
+        ax = mock.Mock()
+
+        twopanel.add_cwfis_unavailable_label(ax)
+
+        ax.text.assert_called_once()
+        self.assertEqual(ax.text.call_args.args[2], "CWFIS fire danger not available")
+
+    def test_edge_footers_use_requested_fire_weather_key(self):
+        left, right = twopanel.edge_panel_footers(6)
+
+        self.assertEqual(left, "RH <30/20% brown / >60/80% blue | 3-h max gust")
+        self.assertEqual(
+            right,
+            "Fcst fire danger | 3-h Ltg cntrd | Dry Ltg * | Rain:blue dots 2.5/10 mm",
+        )
+        self.assertNotIn("Transmission", left)
+        self.assertNotIn("grey", right)
 
     def test_active_fire_footer_is_compact_and_identifies_source(self):
         activity = fire_activity.FireActivity(
@@ -199,18 +202,16 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         self.assertGreater(twopanel.FIRE_OF_NOTE_HALO_AREA, twopanel.FIRE_OF_NOTE_AREA * 1.8)
         self.assertEqual(twopanel.FIRE_OF_NOTE_HALO_COLOR, "#ffe45c")
 
-    def test_header_distinguishes_weather_and_danger_initializations(self):
+    def test_header_shows_only_weather_initialization(self):
         run = lightning.RunInfo(
             cycle="12",
             stamp="20260807T12Z",
             init_time=dt.datetime(2026, 8, 7, 12, tzinfo=dt.timezone.utc),
         )
-        danger_init = dt.datetime(2026, 8, 7, 6, tzinfo=dt.timezone.utc)
+        label = twopanel.figure_source_label(run, None)
 
-        label = twopanel.figure_source_label(run, None, danger_init)
-
-        self.assertIn("WX INIT 2026080712Z", label)
-        self.assertIn("DANGER INIT 2026080706Z", label)
+        self.assertIn("INIT 2026080712Z", label)
+        self.assertNotIn("DANGER INIT", label)
 
     def test_projection_is_clockwise_and_projected_crop_is_portrait(self):
         self.assertEqual(twopanel.PLOT_CRS.proj4_params["lon_0"], -98.0)
