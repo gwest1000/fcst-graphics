@@ -9,8 +9,8 @@
       :root {
         color-scheme: light;
         --plot-aspect: 1.6;
-        --viewer-chrome-height: 52px;
-        --sidebar-width: 276px;
+        --viewer-chrome-height: 44px;
+        --sidebar-width: 252px;
         --hydro-blue: #05a1c6;
         --hydro-green: #48a739;
         --hydro-ink: #3e3935;
@@ -50,10 +50,10 @@
 
       .masthead {
         display: grid;
-        gap: 10px;
+        gap: 7px;
         align-content: start;
-        padding: 12px 10px 13px;
-        border-bottom: 4px solid var(--hydro-green);
+        padding: 9px 8px 10px;
+        border-bottom: 3px solid var(--hydro-green);
         background: var(--nav-deep);
         color: #fff;
       }
@@ -68,28 +68,28 @@
       .brand-mark {
         display: grid;
         place-items: center;
-        width: 34px;
-        height: 34px;
+        width: 30px;
+        height: 30px;
         border: 3px solid #fff;
         border-radius: 7px;
         background:
           linear-gradient(135deg, var(--hydro-blue) 0 58%, var(--hydro-green) 58% 100%);
         color: #fff;
-        font-size: 1rem;
+        font-size: 0.9rem;
         font-weight: 900;
         letter-spacing: 0;
       }
 
       h1 {
         margin: 0;
-        font-size: 1.2rem;
+        font-size: 1.08rem;
         line-height: 1.08;
         letter-spacing: 0;
       }
 
       .top-tools {
         display: grid;
-        gap: 7px;
+        gap: 5px;
       }
 
       .run-picker,
@@ -97,8 +97,8 @@
         display: flex;
         gap: 8px;
         align-items: center;
-        min-height: 34px;
-        padding: 5px 9px;
+        min-height: 30px;
+        padding: 4px 7px;
         border: 1px solid rgba(255, 255, 255, 0.28);
         background: rgba(255, 255, 255, 0.1);
         color: #fff;
@@ -106,7 +106,7 @@
       }
 
       .run-picker {
-        font-size: 0.92rem;
+        font-size: 0.84rem;
       }
 
       .run-picker select {
@@ -116,13 +116,13 @@
         border-radius: 4px;
         background: #fff;
         color: #12242d;
-        padding: 5px 8px;
+        padding: 4px 6px;
         font-weight: 750;
       }
 
       .status-pill {
         color: #e9f8fb;
-        font-size: 0.84rem;
+        font-size: 0.77rem;
       }
 
       .workspace {
@@ -146,7 +146,7 @@
       .category-title,
       .menu-button {
         width: 100%;
-        min-height: 39px;
+        min-height: 35px;
         border: 0;
         border-bottom: 1px solid rgba(0, 0, 0, 0.42);
         border-radius: 0;
@@ -156,22 +156,22 @@
       .category-title {
         display: flex;
         align-items: center;
-        padding: 8px 12px;
+        padding: 6px 10px;
         background: var(--nav-deep);
         color: #fff;
-        font-size: 0.98rem;
+        font-size: 0.91rem;
         font-weight: 850;
       }
 
       .menu-button {
         display: grid;
-        grid-template-columns: 27px minmax(0, 1fr);
-        gap: 6px;
+        grid-template-columns: 23px minmax(0, 1fr);
+        gap: 5px;
         align-items: center;
-        padding: 0 10px 0 9px;
+        padding: 0 8px;
         color: #e6f8fc;
         background: var(--nav-mid);
-        font-size: 0.94rem;
+        font-size: 0.87rem;
         font-weight: 800;
       }
 
@@ -193,8 +193,8 @@
       }
 
       .menu-button.model {
-        min-height: 36px;
-        padding-left: 36px;
+        min-height: 32px;
+        padding-left: 31px;
         grid-template-columns: 1fr;
         background: #d6ecfb;
         color: #073653;
@@ -214,10 +214,10 @@
         display: inline-block;
         width: 0;
         height: 0;
-        margin-left: 8px;
-        border-top: 7px solid transparent;
-        border-bottom: 7px solid transparent;
-        border-left: 9px solid currentColor;
+        margin-left: 7px;
+        border-top: 6px solid transparent;
+        border-bottom: 6px solid transparent;
+        border-left: 8px solid currentColor;
       }
 
       .expanded > .chevron {
@@ -286,10 +286,10 @@
 
       .controls {
         display: grid;
-        grid-template-columns: repeat(3, auto) minmax(180px, 1fr) auto;
-        gap: 6px;
+        grid-template-columns: repeat(3, auto) minmax(160px, 1fr) auto;
+        gap: 5px;
         align-items: center;
-        padding: 7px 10px 6px;
+        padding: 4px 8px 3px;
         border-bottom: 1px solid var(--line);
         background: #f6f9fa;
       }
@@ -311,12 +311,13 @@
 
       .controls button,
       .controls select {
-        min-height: 32px;
+        min-height: 29px;
         border: 1px solid var(--line);
         border-radius: 6px;
         background: #fff;
         color: #18252b;
-        padding: 5px 9px;
+        padding: 3px 8px;
+        font-size: 0.88rem;
         font-weight: 850;
         text-decoration: none;
       }
@@ -330,7 +331,7 @@
       }
 
       .controls .primary {
-        min-width: 70px;
+        min-width: 64px;
         border-color: var(--hydro-blue);
         background: var(--hydro-blue);
         color: #fff;
@@ -344,16 +345,16 @@
 
       input[type="range"] {
         width: 100%;
-        height: 14px;
+        height: 12px;
         accent-color: var(--hydro-green);
       }
 
       .slider-ticks {
         position: relative;
-        height: 20px;
-        margin-top: 2px;
+        height: 17px;
+        margin-top: 1px;
         color: var(--muted);
-        font-size: 0.68rem;
+        font-size: 0.64rem;
         line-height: 1;
         font-weight: 800;
       }
