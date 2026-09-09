@@ -90,17 +90,17 @@ MSLP_STANDARD_COLOR = "#5f5f5f"
 MSLP_BLUE = "#0046ff"
 TEMP850_SMOOTHING_KM = 8.0
 TEMP850_LEVELS_C = np.arange(-34, 36, 2)
-TEMP850_STANDARD_LINEWIDTH = 2.40
-TEMP850_ZERO_LINEWIDTH = 2.60
-TEMP850_WARM_LINEWIDTH = 2.40
-TEMP850_HOT_LINEWIDTH = 2.60
+TEMP850_STANDARD_LINEWIDTH = 2.10
+TEMP850_ZERO_LINEWIDTH = 2.30
+TEMP850_WARM_LINEWIDTH = 2.10
+TEMP850_HOT_LINEWIDTH = 2.30
 TEMP850_LABEL_FONTSIZE = 6.7
 TEMP850_VERY_COLD_COLOR = "#ff00ff"
 TEMP850_COLD_COLOR = "#0000ff"
 TEMP850_ZERO_COLOR = "#000000"
 TEMP850_MILD_COLOR = "#646464"
 TEMP850_MILD_OUTLINE_COLOR = "#b4b4b4"
-TEMP850_MILD_INNER_LINEWIDTH = 1.68
+TEMP850_MILD_INNER_LINEWIDTH = 1.50
 TEMP850_WARM_COLOR = "#ff8700"
 TEMP850_HOT_COLOR = "#ff0000"
 TEMP850_COLD_LINESTYLE = "--"
@@ -422,6 +422,19 @@ def label_contours(contours, fontsize: float = 6.2, fmt: str = "%g", colors=None
     labels = contours.axes.clabel(contours, inline=True, inline_spacing=4, fmt=fmt, fontsize=fontsize, colors=colors)
     for label in labels:
         label.set_path_effects([path_effects.withStroke(linewidth=1.7, foreground="white", alpha=0.9)])
+
+
+def style_temperature_contours(contours, color: str, linewidth: float) -> None:
+    if color == TEMP850_MILD_COLOR:
+        contours.set_linewidth(TEMP850_MILD_INNER_LINEWIDTH)
+        # Inline labels invalidate legacy .collections; style the ContourSet itself.
+        contours.set_path_effects([
+            path_effects.Stroke(
+                linewidth=linewidth, foreground=TEMP850_MILD_OUTLINE_COLOR
+            ),
+            path_effects.Normal(),
+        ])
+    label_contours(contours, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%d", colors=color)
 
 
 def make_absv_cmap() -> tuple[mcolors.Colormap, mcolors.BoundaryNorm, list[float]]:
@@ -797,26 +810,12 @@ def plot_fourpanel(
             ctmp,
             levels=contour_levels,
             colors=color,
-            linewidths=TEMP850_MILD_INNER_LINEWIDTH if color == TEMP850_MILD_COLOR else linewidth,
+            linewidths=linewidth,
             linestyles=linestyle,
             transform=DATA_CRS,
             zorder=zorder,
         )
-        if color == TEMP850_MILD_COLOR:
-            # The outline shares the standard contour's total footprint.
-            for collection in temperature_contours.collections:
-                collection.set_path_effects([
-                    path_effects.Stroke(
-                        linewidth=linewidth, foreground=TEMP850_MILD_OUTLINE_COLOR
-                    ),
-                    path_effects.Normal(),
-                ])
-        label_contours(
-            temperature_contours,
-            fontsize=TEMP850_LABEL_FONTSIZE,
-            fmt="%d",
-            colors=color,
-        )
+        style_temperature_contours(temperature_contours, color, linewidth)
     plot_barbs(ax, plot_lon, plot_lat, u_panel, v_panel, barb_stride, color="black", row_density=2.0, column_density=2.0)
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[10, 15, 20, 25, 30, 70, 75, 80, 85, 90], label="%", fmt="%g")

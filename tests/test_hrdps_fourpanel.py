@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 
 import matplotlib.colors as mcolors
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 import numpy as np
 
 import make_hrdps_west_convective as hrdps
@@ -115,6 +117,28 @@ class HrdpsFourPanelTest(unittest.TestCase):
         self.assertEqual(fourpanel.TEMP850_WARM_COLOR, "#ff8700")
         self.assertEqual(fourpanel.TEMP850_HOT_COLOR, "#ff0000")
         self.assertGreater(fourpanel.TEMP850_STANDARD_LINEWIDTH, 1.05)
+
+    def test_temperature_outline_renders_after_inline_labels(self) -> None:
+        fig = Figure(figsize=(4, 2), dpi=plot_style.PLOT_DPI)
+        canvas = FigureCanvasAgg(fig)
+        ax = fig.add_axes((0, 0, 1, 1), facecolor="#008000")
+        x, y = np.meshgrid(np.linspace(0, 20, 50), np.linspace(0, 20, 50))
+        contours = ax.contour(
+            x, y, y, levels=[10], colors=fourpanel.TEMP850_MILD_COLOR,
+            linewidths=fourpanel.TEMP850_STANDARD_LINEWIDTH,
+        )
+        fourpanel.style_temperature_contours(
+            contours, fourpanel.TEMP850_MILD_COLOR, fourpanel.TEMP850_STANDARD_LINEWIDTH
+        )
+        self.assertTrue(contours.labelTexts)
+        canvas.draw()
+        outlined = np.asarray(canvas.buffer_rgba()).copy()
+
+        # Keep the label halos; only removing the line outline must change pixels.
+        contours.set_path_effects([])
+        canvas.draw()
+        plain = np.asarray(canvas.buffer_rgba()).copy()
+        self.assertGreater(np.count_nonzero(np.any(outlined != plain, axis=2)), 200)
 
     def test_fourpanel_colorbars_fill_plot_height_and_reach_right_border(self) -> None:
         backdrop = plot_style.FOURPANEL_COLORBAR_BACKDROP
