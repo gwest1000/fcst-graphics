@@ -90,14 +90,17 @@ MSLP_STANDARD_COLOR = "#5f5f5f"
 MSLP_BLUE = "#0046ff"
 TEMP850_SMOOTHING_KM = 8.0
 TEMP850_LEVELS_C = np.arange(-34, 36, 2)
-TEMP850_STANDARD_LINEWIDTH = 1.40
-TEMP850_ZERO_LINEWIDTH = 1.90
-TEMP850_WARM_LINEWIDTH = 1.75
-TEMP850_HOT_LINEWIDTH = 1.90
+TEMP850_STANDARD_LINEWIDTH = 1.68
+TEMP850_ZERO_LINEWIDTH = 2.28
+TEMP850_WARM_LINEWIDTH = 2.10
+TEMP850_HOT_LINEWIDTH = 2.28
+TEMP850_LABEL_FONTSIZE = 6.7
 TEMP850_VERY_COLD_COLOR = "#ff00ff"
 TEMP850_COLD_COLOR = "#0000ff"
 TEMP850_ZERO_COLOR = "#000000"
-TEMP850_MILD_COLOR = "#787878"
+TEMP850_MILD_COLOR = "#646464"
+TEMP850_MILD_OUTLINE_COLOR = "#b4b4b4"
+TEMP850_MILD_INNER_LINEWIDTH = TEMP850_STANDARD_LINEWIDTH - 0.4
 TEMP850_WARM_COLOR = "#ff8700"
 TEMP850_HOT_COLOR = "#ff0000"
 TEMP850_COLD_LINESTYLE = "--"
@@ -794,14 +797,23 @@ def plot_fourpanel(
             ctmp,
             levels=contour_levels,
             colors=color,
-            linewidths=linewidth,
+            linewidths=TEMP850_MILD_INNER_LINEWIDTH if color == TEMP850_MILD_COLOR else linewidth,
             linestyles=linestyle,
             transform=DATA_CRS,
             zorder=zorder,
         )
+        if color == TEMP850_MILD_COLOR:
+            # The outline shares the standard contour's total footprint.
+            for collection in temperature_contours.collections:
+                collection.set_path_effects([
+                    path_effects.Stroke(
+                        linewidth=linewidth, foreground=TEMP850_MILD_OUTLINE_COLOR
+                    ),
+                    path_effects.Normal(),
+                ])
         label_contours(
             temperature_contours,
-            fontsize=5.8,
+            fontsize=TEMP850_LABEL_FONTSIZE,
             fmt="%d",
             colors=color,
         )
