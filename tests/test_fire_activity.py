@@ -10,6 +10,12 @@ import fire_activity
 
 
 class FireActivityTests(unittest.TestCase):
+    def test_fire_status_labels_normalize_to_radar_sat_categories(self):
+        self.assertEqual(fire_activity.fire_status_key("Out of Control"), "out_of_control")
+        self.assertEqual(fire_activity.fire_status_key("BH"), "being_held")
+        self.assertEqual(fire_activity.fire_status_key("Under_Control"), "under_control")
+        self.assertEqual(fire_activity.fire_status_key("Status unavailable"), "unknown")
+
     def test_active_fire_parser_excludes_out_incidents_and_marks_fires_of_note(self):
         features = [
             {
@@ -37,6 +43,77 @@ class FireActivityTests(unittest.TestCase):
         self.assertTrue(observations[0].fire_of_note)
         self.assertEqual(observations[0].name, "Brunswick Creek")
         self.assertAlmostEqual(observations[0].size_hectares, 5389.6)
+        self.assertEqual(observations[0].agency, "BCWS")
+
+    def test_us_active_fire_parser_marks_current_ics209_large_incidents(self):
+        features = [
+            {
+                "geometry": None,
+                "properties": {
+                    "InitialLongitude": -120.5,
+                    "InitialLatitude": 48.2,
+                    "IncidentName": "Example Fire",
+                    "UniqueFireIdentifier": "2026-WA-ABC-123",
+                    "IncidentSize": 100.0,
+                    "ModifiedOnDateTime_dt": 1780000000000,
+                    "ICS209ReportStatus": "U",
+                },
+            }
+        ]
+
+        observations = fire_activity.parse_us_active_fire_features(features)
+
+        self.assertEqual(len(observations), 1)
+        self.assertEqual(observations[0].agency, "NIFC")
+        self.assertTrue(observations[0].is_highlighted)
+        self.assertAlmostEqual(
+            observations[0].size_hectares,
+            100.0 * fire_activity.ACRES_TO_HECTARES,
+        )
+        self.assertEqual(fire_activity.fire_status_key(observations[0].status), "unknown")
+
+    def test_active_fire_download_combines_bcws_and_nifc(self):
+        now = dt.datetime(2026, 9, 9, 18, tzinfo=dt.timezone.utc)
+        bc = fire_activity.FireActivity(
+            source="bcws_active_fires",
+            retrieved_at=now,
+            observations=(fire_activity.FireObservation(-121.7, 51.3, "active_fire"),),
+        )
+        us = fire_activity.FireActivity(
+            source="nifc_active_fires",
+            retrieved_at=now,
+            observations=(fire_activity.FireObservation(-120.5, 48.2, "active_fire"),),
+        )
+        with (
+            mock.patch.object(fire_activity, "download_bc_active_fires", return_value=bc),
+            mock.patch.object(fire_activity, "download_us_active_fires", return_value=us),
+        ):
+            activity = fire_activity.download_active_fires(now)
+
+        self.assertEqual(activity.source, "bcws_nifc_active_fires")
+        self.assertEqual(len(activity.observations), 2)
+        self.assertTrue(activity.is_active_fire_feed)
+
+    def test_nifc_failure_does_not_suppress_bcws_fires(self):
+        now = dt.datetime(2026, 9, 9, 18, tzinfo=dt.timezone.utc)
+        bc = fire_activity.FireActivity(
+            source="bcws_active_fires",
+            retrieved_at=now,
+            observations=(fire_activity.FireObservation(-121.7, 51.3, "active_fire"),),
+        )
+        messages = []
+        with (
+            mock.patch.object(fire_activity, "download_bc_active_fires", return_value=bc),
+            mock.patch.object(
+                fire_activity,
+                "download_us_active_fires",
+                side_effect=requests.Timeout("offline"),
+            ),
+        ):
+            activity = fire_activity.download_active_fires(now, logger=messages.append)
+
+        self.assertEqual(activity, bc)
+        self.assertTrue(any("continuing with BCWS" in message for message in messages))
 
     def test_hotspots_are_clustered_into_plot_scale_cells(self):
         features = [

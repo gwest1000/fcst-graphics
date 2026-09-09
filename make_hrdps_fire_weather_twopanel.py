@@ -113,7 +113,13 @@ PRECIP_DOT_MODERATE_COLOR = "#b8f1f2"
 PRECIP_DOT_MODERATE_EDGE_COLOR = "#007f86"
 PRECIP_DOT_HEAVY_COLOR = "#00a8ad"
 REGIONAL_PRECIP_DOT_AREA_MULTIPLIER = 1.25
-ACTIVE_FIRE_COLOR = "#ff815c"
+ACTIVE_FIRE_STATUS_COLORS = {
+    "unknown": "#ff8a4f",
+    "under_control": "#53be69",
+    "being_held": "#f4c73f",
+    "out_of_control": "#ef5239",
+}
+ACTIVE_FIRE_COLOR = ACTIVE_FIRE_STATUS_COLORS["unknown"]
 ACTIVE_FIRE_OUTLINE_COLOR = "#111111"
 ACTIVE_FIRE_AREA = 31.0
 FIRE_OF_NOTE_AREA = 84.0
@@ -341,7 +347,10 @@ def fire_activity_source(activity: fire_activity.FireActivity | None) -> str:
         return "ECCC HRDPS/CWFIS"
     if activity.is_active_fire_feed:
         cache_label = " CACHED" if activity.stale else ""
-        return f"ECCC HRDPS/CWFIS/BCWS {activity.retrieved_at:%H}Z{cache_label}"
+        agency_label = (
+            "BCWS/NIFC" if activity.source == "bcws_nifc_active_fires" else "BCWS"
+        )
+        return f"ECCC HRDPS/CWFIS/{agency_label} {activity.retrieved_at:%H}Z{cache_label}"
     return "ECCC HRDPS/CWFIS 24-H HOTSPOTS"
 
 
@@ -375,8 +384,16 @@ def add_fire_activity(
     if activity is None or not activity.observations:
         return
     if activity.is_active_fire_feed:
-        regular = [observation for observation in activity.observations if not observation.fire_of_note]
-        notes = [observation for observation in activity.observations if observation.fire_of_note]
+        regular = [
+            observation
+            for observation in activity.observations
+            if not observation.is_highlighted
+        ]
+        notes = [
+            observation
+            for observation in activity.observations
+            if observation.is_highlighted
+        ]
         if notes:
             ax.scatter(
                 [observation.longitude for observation in notes],
@@ -397,7 +414,10 @@ def add_fire_activity(
                 [observation.latitude for observation in observations],
                 marker=ACTIVE_FIRE_MARKER,
                 s=area,
-                facecolor=ACTIVE_FIRE_COLOR,
+                facecolors=[
+                    ACTIVE_FIRE_STATUS_COLORS[fire_activity.fire_status_key(observation.status)]
+                    for observation in observations
+                ],
                 edgecolors=ACTIVE_FIRE_OUTLINE_COLOR,
                 linewidths=0.52,
                 transform=lightning.DATA_CRS,

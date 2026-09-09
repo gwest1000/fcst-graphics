@@ -94,13 +94,23 @@ class HrdpsFourPanelTest(unittest.TestCase):
         self.assertEqual(fourpanel.HGT500_LABEL_FORMAT % 6.00, "6.00")
 
     def test_850_temperature_style_groups_are_exclusive_and_complete(self) -> None:
-        standard, zero, warm, hot = fourpanel.temp850_contour_groups()
-        combined = np.sort(np.concatenate((standard, zero, warm, hot)))
+        very_cold, cold, zero, mild, warm, hot = fourpanel.temp850_contour_groups()
+        combined = np.sort(np.concatenate((very_cold, cold, zero, mild, warm, hot)))
 
         np.testing.assert_array_equal(combined, fourpanel.TEMP850_LEVELS_C)
+        self.assertTrue(np.all(very_cold < -15))
+        self.assertTrue(np.all((cold >= -15) & (cold <= -2)))
         np.testing.assert_array_equal(zero, [0])
+        self.assertTrue(np.all((mild >= 2) & (mild <= 15)))
         np.testing.assert_array_equal(warm, [16, 18])
         self.assertTrue(np.all(hot >= 20))
+        self.assertEqual(fourpanel.TEMP850_VERY_COLD_COLOR, "#ff00ff")
+        self.assertEqual(fourpanel.TEMP850_COLD_COLOR, "#0000ff")
+        self.assertEqual(fourpanel.TEMP850_COLD_LINESTYLE, "--")
+        self.assertEqual(fourpanel.TEMP850_ZERO_COLOR, "#000000")
+        self.assertEqual(fourpanel.TEMP850_MILD_COLOR, "#787878")
+        self.assertEqual(fourpanel.TEMP850_WARM_COLOR, "#ff8700")
+        self.assertEqual(fourpanel.TEMP850_HOT_COLOR, "#ff0000")
         self.assertGreater(fourpanel.TEMP850_STANDARD_LINEWIDTH, 1.05)
 
     def test_fourpanel_colorbars_fill_plot_height_and_reach_right_border(self) -> None:

@@ -7,17 +7,23 @@ reused across every forecast hour.
 
 ## Source Priority
 
-1. Use the BC Wildfire Service `Fire Locations - Current` ArcGIS layer.
-2. Exclude incidents whose `FIRE_STATUS` is `Out`.
+1. Use the BC Wildfire Service `Fire Locations - Current` ArcGIS layer and
+   exclude incidents whose `FIRE_STATUS` is `Out`.
+2. Add current U.S. wildfires from NIFC WFIGS/IRWIN. A NIFC failure does not
+   suppress an otherwise valid BCWS overlay.
 3. If the BCWS service is unavailable, use the NRCan/CWFIS
    `hotspots_last24hrs` WFS layer and retain detections assigned to BC.
 4. If both live services fail, use a cached observation set no more than 12
    hours old. Otherwise render the model graphic without the overlay.
 
-BCWS incidents use the same coral Lucide flame as the weather app, with a
-thin black outline. Fires of Note use a larger flame. The satellite fallback
-is aggregated into roughly 8-10 km cells and shown as orange squares; this
-prevents repeat detections over one fire from obscuring the forecast fields.
+Agency-reported incidents use the same Lucide flame as the radar-satellite
+display, with a thin black outline. BCWS incidents are red for Out of Control,
+yellow for Being Held, and green for Under Control. Incidents without a
+comparable status, including NIFC fires, are orange. Official BC Fires of Note
+and current U.S. ICS-209 large incidents use a larger flame with a yellow halo.
+The satellite fallback is aggregated into roughly 8-10 km cells and shown as
+orange squares; this prevents repeat detections over one fire from obscuring
+the forecast fields.
 
 The active-fire and hotspot caches are considered fresh for 45 minutes. The
 hourly job publishes four 1440x900 transparent overlays plus
@@ -33,7 +39,15 @@ A retrieval or cache-write failure is logged. A cached layer can be used for
 up to 12 hours; after that the manifest marks the layer unavailable and the
 viewer hides it.
 
+## Completed Enhancements
+
+- [x] Bring the fire-weather forecast overlays in line with the radar-satellite
+  displays: colour-code fires by incident status, give Fires of Note a distinct
+  emphasis, and add current U.S. fires with a compatible status mapping and
+  source attribution.
+
 Sources:
 
-- BCWS: <https://delivery.maps.gov.bc.ca/arcgis/rest/services/mpcm/bcgwpub/MapServer/502>
+- BCWS: <https://services6.arcgis.com/ubm4tcTYICKBpist/ArcGIS/rest/services/BCWS_ActiveFires_PublicView/FeatureServer/0>
+- NIFC WFIGS/IRWIN: <https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Incident_Locations_Current/FeatureServer/0>
 - CWFIS: <https://cwfis.cfs.nrcan.gc.ca/geoserver/public/ows>

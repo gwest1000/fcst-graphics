@@ -138,9 +138,10 @@ scripts/launchd/install_pipeline_health_monitor.sh
 
 ## Live fire activity
 
-Fire-weather forecast fields are immutable base PNGs. Current BCWS incidents
-are rendered separately into four transparent, map-aligned overlays and reused
-across every forecast hour. Install the hourly retrieval and R2 publisher with:
+Fire-weather forecast fields are immutable base PNGs. Current BCWS and NIFC
+incidents are rendered separately into a transparent, map-aligned overlay and
+reused across every forecast hour. Install the hourly retrieval and R2 publisher
+with:
 
 ```bash
 scripts/launchd/install_fire_activity_overlay.sh

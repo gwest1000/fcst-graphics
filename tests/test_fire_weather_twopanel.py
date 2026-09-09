@@ -195,12 +195,48 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
 
     def test_active_fire_marker_is_a_custom_flame_path(self):
         self.assertIsInstance(twopanel.ACTIVE_FIRE_MARKER, twopanel.MatplotlibPath)
-        self.assertEqual(twopanel.ACTIVE_FIRE_COLOR, "#ff815c")
+        self.assertEqual(
+            twopanel.ACTIVE_FIRE_STATUS_COLORS,
+            {
+                "unknown": "#ff8a4f",
+                "under_control": "#53be69",
+                "being_held": "#f4c73f",
+                "out_of_control": "#ef5239",
+            },
+        )
+        self.assertEqual(twopanel.ACTIVE_FIRE_COLOR, "#ff8a4f")
         self.assertEqual(twopanel.ACTIVE_FIRE_OUTLINE_COLOR, "#111111")
         self.assertLess(twopanel.ACTIVE_FIRE_AREA, 38.0)
         self.assertGreater(twopanel.FIRE_OF_NOTE_AREA, 70.0)
         self.assertGreater(twopanel.FIRE_OF_NOTE_HALO_AREA, twopanel.FIRE_OF_NOTE_AREA * 1.8)
         self.assertEqual(twopanel.FIRE_OF_NOTE_HALO_COLOR, "#ffe45c")
+
+    def test_active_fire_markers_are_coloured_by_status(self):
+        activity = fire_activity.FireActivity(
+            source="bcws_nifc_active_fires",
+            retrieved_at=dt.datetime(2026, 9, 9, 18, tzinfo=dt.timezone.utc),
+            observations=(
+                fire_activity.FireObservation(-121.0, 51.0, "active_fire", status="OC"),
+                fire_activity.FireObservation(-122.0, 52.0, "active_fire", status="BH"),
+                fire_activity.FireObservation(-123.0, 53.0, "active_fire", status="UC"),
+                fire_activity.FireObservation(
+                    -120.5,
+                    48.2,
+                    "active_fire",
+                    status="Status unavailable",
+                    agency="NIFC",
+                ),
+            ),
+        )
+        ax = mock.Mock()
+
+        twopanel.add_fire_activity(ax, activity)
+
+        self.assertEqual(ax.scatter.call_count, 1)
+        self.assertEqual(
+            ax.scatter.call_args.kwargs["facecolors"],
+            ["#ef5239", "#f4c73f", "#53be69", "#ff8a4f"],
+        )
 
     def test_header_shows_only_weather_initialization(self):
         run = lightning.RunInfo(
