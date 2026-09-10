@@ -9,6 +9,7 @@ import numpy as np
 
 import automate_ensemble_control_fourpanel as automation
 import make_ensemble_control_fourpanel as ensemble
+import make_hrdps_west_fourpanel as hrdps_fourpanel
 import publish_hrdps_west as publisher
 import r2_publish
 
@@ -36,6 +37,9 @@ class FakeEcmwfProvider(ensemble.EcmwfProvider):
 
 
 class EnsembleControlFourPanelTest(unittest.TestCase):
+    def test_850_temperature_contours_share_the_hrdps_renderer(self) -> None:
+        self.assertIs(ensemble.plot_temperature_contours, hrdps_fourpanel.plot_temperature_contours)
+
     def test_500_hpa_height_contours_are_six_dam_and_anchored_at_600_dam(self) -> None:
         np.testing.assert_allclose(np.diff(ensemble.HGT500_LEVELS_KM), 0.06)
         self.assertIn(6.00, ensemble.HGT500_LEVELS_KM)

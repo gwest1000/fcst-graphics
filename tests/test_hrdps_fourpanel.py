@@ -96,49 +96,72 @@ class HrdpsFourPanelTest(unittest.TestCase):
         self.assertEqual(fourpanel.HGT500_LABEL_FORMAT % 6.00, "6.00")
 
     def test_850_temperature_style_groups_are_exclusive_and_complete(self) -> None:
-        very_cold, cold, zero, mild, warm, hot = fourpanel.temp850_contour_groups()
-        combined = np.sort(np.concatenate((very_cold, cold, zero, mild, warm, hot)))
+        groups = fourpanel.temp850_contour_groups()
+        very_cold, turquoise, cold, zero, dark_grey, light_grey, warm, hot = groups
+        combined = np.sort(np.concatenate(groups))
 
         np.testing.assert_array_equal(combined, fourpanel.TEMP850_LEVELS_C)
         self.assertTrue(np.all(very_cold < -15))
-        self.assertTrue(np.all((cold >= -15) & (cold <= -2)))
+        np.testing.assert_array_equal(turquoise, [-14, -12, -10, -8])
+        np.testing.assert_array_equal(cold, [-6, -4, -2])
         np.testing.assert_array_equal(zero, [0])
-        self.assertTrue(np.all((mild >= 2) & (mild <= 15)))
+        np.testing.assert_array_equal(dark_grey, [2, 4, 6])
+        np.testing.assert_array_equal(light_grey, [8, 10, 12, 14])
         np.testing.assert_array_equal(warm, [16, 18])
         self.assertTrue(np.all(hot >= 20))
         self.assertEqual(fourpanel.TEMP850_VERY_COLD_COLOR, "#ff00ff")
+        self.assertEqual(fourpanel.TEMP850_TURQUOISE_COLOR, "#00c8c8")
         self.assertEqual(fourpanel.TEMP850_COLD_COLOR, "#0000ff")
         self.assertEqual(fourpanel.TEMP850_COLD_LINESTYLE, "--")
         self.assertEqual(fourpanel.TEMP850_ZERO_COLOR, "#000000")
-        self.assertEqual(fourpanel.TEMP850_MILD_COLOR, "#646464")
-        self.assertEqual(fourpanel.TEMP850_MILD_OUTLINE_COLOR, "#b4b4b4")
-        self.assertGreater(fourpanel.TEMP850_MILD_INNER_LINEWIDTH, 0)
-        self.assertLess(fourpanel.TEMP850_MILD_INNER_LINEWIDTH, fourpanel.TEMP850_STANDARD_LINEWIDTH)
+        self.assertEqual(fourpanel.TEMP850_DARK_GREY_COLOR, "#434343")
+        self.assertEqual(fourpanel.TEMP850_LIGHT_GREY_COLOR, "#8c8c8c")
+        self.assertEqual(fourpanel.TEMP850_GREY_OUTLINE_COLOR, "#d9d9d9")
+        self.assertGreater(fourpanel.TEMP850_GREY_INNER_LINEWIDTH, 0)
+        self.assertLess(fourpanel.TEMP850_GREY_INNER_LINEWIDTH, fourpanel.TEMP850_STANDARD_LINEWIDTH)
         self.assertEqual(fourpanel.TEMP850_WARM_COLOR, "#ff8700")
         self.assertEqual(fourpanel.TEMP850_HOT_COLOR, "#ff0000")
         self.assertGreater(fourpanel.TEMP850_STANDARD_LINEWIDTH, 1.05)
 
     def test_temperature_outline_renders_after_inline_labels(self) -> None:
-        fig = Figure(figsize=(4, 2), dpi=plot_style.PLOT_DPI)
-        canvas = FigureCanvasAgg(fig)
-        ax = fig.add_axes((0, 0, 1, 1), facecolor="#008000")
-        x, y = np.meshgrid(np.linspace(0, 20, 50), np.linspace(0, 20, 50))
-        contours = ax.contour(
-            x, y, y, levels=[10], colors=fourpanel.TEMP850_MILD_COLOR,
-            linewidths=fourpanel.TEMP850_STANDARD_LINEWIDTH,
-        )
-        fourpanel.style_temperature_contours(
-            contours, fourpanel.TEMP850_MILD_COLOR, fourpanel.TEMP850_STANDARD_LINEWIDTH
-        )
-        self.assertTrue(contours.labelTexts)
-        canvas.draw()
-        outlined = np.asarray(canvas.buffer_rgba()).copy()
+        for color in (fourpanel.TEMP850_DARK_GREY_COLOR, fourpanel.TEMP850_LIGHT_GREY_COLOR):
+            with self.subTest(color=color):
+                fig = Figure(figsize=(4, 2), dpi=plot_style.PLOT_DPI)
+                canvas = FigureCanvasAgg(fig)
+                ax = fig.add_axes((0, 0, 1, 1), facecolor="#008000")
+                x, y = np.meshgrid(np.linspace(0, 20, 50), np.linspace(0, 20, 50))
+                contours = ax.contour(
+                    x, y, y, levels=[10], colors=color,
+                    linewidths=fourpanel.TEMP850_STANDARD_LINEWIDTH,
+                )
+                fourpanel.style_temperature_contours(
+                    contours, color, fourpanel.TEMP850_STANDARD_LINEWIDTH
+                )
+                self.assertTrue(contours.labelTexts)
+                canvas.draw()
+                outlined = np.asarray(canvas.buffer_rgba()).copy()
 
-        # Keep the label halos; only removing the line outline must change pixels.
-        contours.set_path_effects([])
+                # Keep label halos; removing only the line outline must change pixels.
+                contours.set_path_effects([])
+                canvas.draw()
+                plain = np.asarray(canvas.buffer_rgba()).copy()
+                self.assertGreater(np.count_nonzero(np.any(outlined != plain, axis=2)), 200)
+
+    def test_shared_temperature_plotter_draws_each_band_once(self) -> None:
+        fig = Figure(figsize=(8, 4), dpi=plot_style.PLOT_DPI)
+        canvas = FigureCanvasAgg(fig)
+        ax = fig.add_subplot(projection=fourpanel.DATA_CRS)
+        lon, lat = np.meshgrid(np.linspace(-130, -110, 100), np.linspace(45, 55, 100))
+        temperature = (lon + 130) * 4 - 40
+        fourpanel.plot_temperature_contours(ax, lon, lat, temperature)
         canvas.draw()
-        plain = np.asarray(canvas.buffer_rgba()).copy()
-        self.assertGreater(np.count_nonzero(np.any(outlined != plain, axis=2)), 200)
+        self.assertEqual(len(ax.collections), 8)
+        for contours, levels in zip(ax.collections, fourpanel.temp850_contour_groups(), strict=True):
+            np.testing.assert_array_equal(contours.levels, levels)
+            self.assertTrue(contours.labelTexts)
+        for contours in ax.collections[4:6]:
+            self.assertEqual(len(contours.get_path_effects()), 2)
+            self.assertAlmostEqual(contours.get_linewidths()[0], fourpanel.TEMP850_GREY_INNER_LINEWIDTH)
 
     def test_fourpanel_colorbars_fill_plot_height_and_reach_right_border(self) -> None:
         backdrop = plot_style.FOURPANEL_COLORBAR_BACKDROP

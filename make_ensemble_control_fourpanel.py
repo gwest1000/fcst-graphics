@@ -44,6 +44,7 @@ from make_hrdps_west_fourpanel import (
     make_terrain_cmap,
     PRECIP_TICKS_MM,
     plot_barbs,
+    plot_temperature_contours,
 )
 
 ECMWF_THREE_HOURLY_END = 144
@@ -1314,12 +1315,7 @@ def plot_fourpanel(
         tmp850_c,
         stride=contour_stride,
     )
-    temp_ct = ax.contour(clon, clat, ctmp, levels=[level for level in np.arange(-32, 34, 2) if level != 0], colors="black", linewidths=1.15, transform=DATA_CRS, zorder=22)
-    label_contours(temp_ct, fontsize=5.8, fmt="%d")
-    zero_ct = ax.contour(clon, clat, ctmp, levels=[0], colors="#0057ff", linewidths=1.65, transform=DATA_CRS, zorder=23)
-    label_contours(zero_ct, fontsize=5.8, fmt="%d", colors="#0057ff")
-    warm_ct = ax.contour(clon, clat, ctmp, levels=[16], colors="#ff8c00", linewidths=1.45, transform=DATA_CRS, zorder=23)
-    label_contours(warm_ct, fontsize=5.8, fmt="%d", colors="#ff8c00")
+    plot_temperature_contours(ax, clon, clat, ctmp)
     plot_barbs(
         ax,
         u_panel.lon,

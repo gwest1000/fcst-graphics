@@ -96,11 +96,13 @@ TEMP850_WARM_LINEWIDTH = 2.10
 TEMP850_HOT_LINEWIDTH = 2.30
 TEMP850_LABEL_FONTSIZE = 6.7
 TEMP850_VERY_COLD_COLOR = "#ff00ff"
+TEMP850_TURQUOISE_COLOR = "#00c8c8"
 TEMP850_COLD_COLOR = "#0000ff"
 TEMP850_ZERO_COLOR = "#000000"
-TEMP850_MILD_COLOR = "#646464"
-TEMP850_MILD_OUTLINE_COLOR = "#b4b4b4"
-TEMP850_MILD_INNER_LINEWIDTH = 1.50
+TEMP850_DARK_GREY_COLOR = "#434343"
+TEMP850_LIGHT_GREY_COLOR = "#8c8c8c"
+TEMP850_GREY_OUTLINE_COLOR = "#d9d9d9"
+TEMP850_GREY_INNER_LINEWIDTH = 1.50
 TEMP850_WARM_COLOR = "#ff8700"
 TEMP850_HOT_COLOR = "#ff0000"
 TEMP850_COLD_LINESTYLE = "--"
@@ -425,12 +427,12 @@ def label_contours(contours, fontsize: float = 6.2, fmt: str = "%g", colors=None
 
 
 def style_temperature_contours(contours, color: str, linewidth: float) -> None:
-    if color == TEMP850_MILD_COLOR:
-        contours.set_linewidth(TEMP850_MILD_INNER_LINEWIDTH)
+    if color in (TEMP850_DARK_GREY_COLOR, TEMP850_LIGHT_GREY_COLOR):
+        contours.set_linewidth(TEMP850_GREY_INNER_LINEWIDTH)
         # Inline labels invalidate legacy .collections; style the ContourSet itself.
         contours.set_path_effects([
             path_effects.Stroke(
-                linewidth=linewidth, foreground=TEMP850_MILD_OUTLINE_COLOR
+                linewidth=linewidth, foreground=TEMP850_GREY_OUTLINE_COLOR
             ),
             path_effects.Normal(),
         ])
@@ -527,14 +529,40 @@ def temp850_contour_groups() -> tuple[
     np.ndarray,
     np.ndarray,
     np.ndarray,
+    np.ndarray,
+    np.ndarray,
 ]:
     very_cold = TEMP850_LEVELS_C[TEMP850_LEVELS_C < -15]
-    cold = TEMP850_LEVELS_C[(TEMP850_LEVELS_C >= -15) & (TEMP850_LEVELS_C <= -2)]
+    turquoise = TEMP850_LEVELS_C[(TEMP850_LEVELS_C >= -14) & (TEMP850_LEVELS_C <= -8)]
+    cold = TEMP850_LEVELS_C[(TEMP850_LEVELS_C >= -6) & (TEMP850_LEVELS_C <= -2)]
     zero = TEMP850_LEVELS_C[np.isclose(TEMP850_LEVELS_C, 0)]
-    mild = TEMP850_LEVELS_C[(TEMP850_LEVELS_C >= 2) & (TEMP850_LEVELS_C <= 15)]
+    dark_grey = TEMP850_LEVELS_C[(TEMP850_LEVELS_C >= 2) & (TEMP850_LEVELS_C <= 6)]
+    light_grey = TEMP850_LEVELS_C[(TEMP850_LEVELS_C >= 8) & (TEMP850_LEVELS_C <= 14)]
     warm = TEMP850_LEVELS_C[(TEMP850_LEVELS_C >= 16) & (TEMP850_LEVELS_C < 20)]
     hot = TEMP850_LEVELS_C[TEMP850_LEVELS_C >= 20]
-    return very_cold, cold, zero, mild, warm, hot
+    return very_cold, turquoise, cold, zero, dark_grey, light_grey, warm, hot
+
+
+def plot_temperature_contours(
+    ax: plt.Axes, lon: np.ndarray, lat: np.ndarray, temperature_c: np.ndarray
+) -> None:
+    """Draw the same 850 hPa contour bands for every four-panel model."""
+    styles = (
+        (TEMP850_VERY_COLD_COLOR, TEMP850_STANDARD_LINEWIDTH, "solid", 22),
+        (TEMP850_TURQUOISE_COLOR, TEMP850_STANDARD_LINEWIDTH, TEMP850_COLD_LINESTYLE, 22),
+        (TEMP850_COLD_COLOR, TEMP850_STANDARD_LINEWIDTH, TEMP850_COLD_LINESTYLE, 22),
+        (TEMP850_ZERO_COLOR, TEMP850_ZERO_LINEWIDTH, "solid", 23),
+        (TEMP850_DARK_GREY_COLOR, TEMP850_STANDARD_LINEWIDTH, "solid", 22),
+        (TEMP850_LIGHT_GREY_COLOR, TEMP850_STANDARD_LINEWIDTH, "solid", 22),
+        (TEMP850_WARM_COLOR, TEMP850_WARM_LINEWIDTH, "solid", 23),
+        (TEMP850_HOT_COLOR, TEMP850_HOT_LINEWIDTH, "solid", 23),
+    )
+    for levels, (color, linewidth, linestyle, zorder) in zip(temp850_contour_groups(), styles, strict=True):
+        contours = ax.contour(
+            lon, lat, temperature_c, levels=levels, colors=color,
+            linewidths=linewidth, linestyles=linestyle, transform=DATA_CRS, zorder=zorder,
+        )
+        style_temperature_contours(contours, color, linewidth)
 
 
 def add_base_features(ax: plt.Axes, extent: tuple[float, float, float, float]) -> None:
@@ -780,42 +808,7 @@ def plot_fourpanel(
         stride=contour_stride,
         sigma=sigma_for_km(TEMP850_SMOOTHING_KM),
     )
-    very_cold_levels, cold_levels, zero_levels, mild_levels, warm_levels, hot_levels = (
-        temp850_contour_groups()
-    )
-    temperature_styles = (
-        (
-            very_cold_levels,
-            TEMP850_VERY_COLD_COLOR,
-            TEMP850_STANDARD_LINEWIDTH,
-            "solid",
-            22,
-        ),
-        (
-            cold_levels,
-            TEMP850_COLD_COLOR,
-            TEMP850_STANDARD_LINEWIDTH,
-            TEMP850_COLD_LINESTYLE,
-            22,
-        ),
-        (zero_levels, TEMP850_ZERO_COLOR, TEMP850_ZERO_LINEWIDTH, "solid", 23),
-        (mild_levels, TEMP850_MILD_COLOR, TEMP850_STANDARD_LINEWIDTH, "solid", 22),
-        (warm_levels, TEMP850_WARM_COLOR, TEMP850_WARM_LINEWIDTH, "solid", 23),
-        (hot_levels, TEMP850_HOT_COLOR, TEMP850_HOT_LINEWIDTH, "solid", 23),
-    )
-    for contour_levels, color, linewidth, linestyle, zorder in temperature_styles:
-        temperature_contours = ax.contour(
-            clon,
-            clat,
-            ctmp,
-            levels=contour_levels,
-            colors=color,
-            linewidths=linewidth,
-            linestyles=linestyle,
-            transform=DATA_CRS,
-            zorder=zorder,
-        )
-        style_temperature_contours(temperature_contours, color, linewidth)
+    plot_temperature_contours(ax, clon, clat, ctmp)
     plot_barbs(ax, plot_lon, plot_lat, u_panel, v_panel, barb_stride, color="black", row_density=2.0, column_density=2.0)
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[10, 15, 20, 25, 30, 70, 75, 80, 85, 90], label="%", fmt="%g")
