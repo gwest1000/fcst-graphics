@@ -112,7 +112,7 @@ class HrdpsFourPanelTest(unittest.TestCase):
         self.assertEqual(fourpanel.TEMP850_VERY_COLD_COLOR, "#ff00ff")
         self.assertEqual(fourpanel.TEMP850_TURQUOISE_COLOR, "#00c8c8")
         self.assertEqual(fourpanel.TEMP850_COLD_COLOR, "#0000ff")
-        self.assertEqual(fourpanel.TEMP850_COLD_LINESTYLE, "--")
+        self.assertEqual(fourpanel.TEMP850_COLD_LINESTYLE, "solid")
         self.assertEqual(fourpanel.TEMP850_ZERO_COLOR, "#000000")
         self.assertEqual(fourpanel.TEMP850_DARK_GREY_COLOR, "#434343")
         self.assertEqual(fourpanel.TEMP850_LIGHT_GREY_COLOR, "#8c8c8c")
@@ -159,6 +159,8 @@ class HrdpsFourPanelTest(unittest.TestCase):
         for contours, levels in zip(ax.collections, fourpanel.temp850_contour_groups(), strict=True):
             np.testing.assert_array_equal(contours.levels, levels)
             self.assertTrue(contours.labelTexts)
+            self.assertTrue(all(dashes is None for _, dashes in contours.get_linestyles()))
+            self.assertTrue(all(label.get_fontsize() == fourpanel.TEMP850_LABEL_FONTSIZE for label in contours.labelTexts))
         for contours in ax.collections[4:6]:
             self.assertEqual(len(contours.get_path_effects()), 2)
             self.assertAlmostEqual(contours.get_linewidths()[0], fourpanel.TEMP850_GREY_INNER_LINEWIDTH)
