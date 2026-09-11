@@ -5,7 +5,10 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from matplotlib.backends.backend_agg import FigureCanvasAgg
+from matplotlib.figure import Figure
 import numpy as np
+from shapely.geometry import box
 
 import automate_ensemble_control_fourpanel as automation
 import make_ensemble_control_fourpanel as ensemble
@@ -84,6 +87,60 @@ class EnsembleControlFourPanelTest(unittest.TestCase):
         terrain = ensemble.geopotential_height_m(geopotential)
 
         np.testing.assert_allclose(terrain.data, 2.0)
+
+    def test_terrain_mask_removes_offshore_shading_but_preserves_islands_and_weather(self) -> None:
+        ensemble.terrain_ocean_mask.cache_clear()
+        self.addCleanup(ensemble.terrain_ocean_mask.cache_clear)
+        fig = Figure(figsize=(4, 4), dpi=100)
+        canvas = FigureCanvasAgg(fig)
+        ax = fig.add_axes((0, 0, 1, 1), projection=ensemble.DATA_CRS, facecolor="white")
+        ax.set_extent((-126, -122, 49, 53), crs=ensemble.DATA_CRS)
+        lon, lat = np.meshgrid(np.linspace(-126, -122, 30), np.linspace(49, 53, 30))
+        terrain = ensemble.Field(np.full(lon.shape, 550.0), lat, lon)
+        island = box(-125.7, 51.7, -125.3, 52.3)
+        ocean = ensemble.cfeature.ShapelyFeature(
+            [box(-126, 49, -124, 53).difference(island)], ensemble.DATA_CRS
+        )
+        with mock.patch.object(ensemble.cfeature.OCEAN, "with_scale", return_value=ocean) as feature:
+            ensemble.plot_terrain_background(ax, terrain, 1)
+        feature.assert_called_once_with("10m")
+
+        # Weather layers must still draw over masked ocean.
+        ax.contourf(
+            lon, lat, np.where((lon < -124) & (lat < 50), 1.0, np.nan),
+            levels=[0.5, 1.5], colors=["blue"], transform=ensemble.DATA_CRS, zorder=3,
+        )
+        ax.plot([-125.5, -124.5], [51, 51], color="black", linewidth=3, transform=ensemble.DATA_CRS, zorder=22)
+        canvas.draw()
+        pixels = np.asarray(canvas.buffer_rgba())
+
+        def pixel(longitude, latitude):
+            x, y = ax.transData.transform((longitude, latitude))
+            return pixels[pixels.shape[0] - 1 - int(y), int(x), :3]
+
+        np.testing.assert_array_equal(pixel(-124.5, 52), [255, 255, 255])
+        cmap, norm, _ = ensemble.make_terrain_cmap()
+        brown = np.round(np.array(cmap(norm(550.0)))[:3] * 255).astype(int)
+        np.testing.assert_allclose(pixel(-123, 52), brown, atol=1)
+        np.testing.assert_allclose(pixel(-125.5, 52), brown, atol=1)
+        np.testing.assert_array_equal(pixel(-125, 49.5), [0, 0, 255])
+        np.testing.assert_array_equal(pixel(-125, 51), [0, 0, 0])
+
+    def test_provider_without_terrain_does_not_add_a_mask(self) -> None:
+        ax = mock.Mock()
+        ensemble.plot_terrain_background(ax, None, 1)
+        self.assertEqual(ax.mock_calls, [])
+
+    def test_ocean_mask_clips_global_geometry_and_is_cached_between_frames(self) -> None:
+        ensemble.terrain_ocean_mask.cache_clear()
+        self.addCleanup(ensemble.terrain_ocean_mask.cache_clear)
+        ocean = ensemble.cfeature.ShapelyFeature([box(-180, -90, 180, 90)], ensemble.DATA_CRS)
+        with mock.patch.object(ensemble.cfeature.OCEAN, "with_scale", return_value=ocean) as feature:
+            first = ensemble.terrain_ocean_mask((-126, -122, 49, 53))
+            second = ensemble.terrain_ocean_mask((-126, -122, 49, 53))
+        self.assertIs(first, second)
+        feature.assert_called_once_with("10m")
+        self.assertEqual(next(first.geometries()).bounds, (-127, 48, -121, 54))
 
     def test_ecmwf_source_stamp_includes_initialization(self) -> None:
         self.assertEqual(ensemble.MODEL_CONFIGS["ecmwf_control"].source_label, "ECMWF")

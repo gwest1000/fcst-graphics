@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import functools
 import subprocess
 import sys
 import warnings
@@ -23,6 +24,7 @@ import numpy as np
 from eccodes import codes_get, codes_get_array, codes_grib_new_from_file, codes_release
 from matplotlib.lines import Line2D
 from scipy.interpolate import RegularGridInterpolator
+from shapely.geometry import box
 
 import plot_style
 import ecmwf_convective_data
@@ -922,6 +924,45 @@ def add_base_features(ax: plt.Axes) -> None:
         pass
 
 
+@functools.lru_cache(maxsize=4)
+def terrain_ocean_mask(extent: tuple[float, float, float, float]) -> cfeature.ShapelyFeature:
+    west, east, south, north = extent
+    bounds = box(west - 1, south - 1, east + 1, north + 1)
+    ocean = cfeature.OCEAN.with_scale("10m")
+    # Clip before projection: the source includes a single global ocean polygon.
+    return cfeature.ShapelyFeature(
+        [geometry.intersection(bounds) for geometry in ocean.intersecting_geometries(extent)],
+        DATA_CRS,
+    )
+
+
+def plot_terrain_background(ax: plt.Axes, terrain: Field | None, shade_stride: int) -> None:
+    if terrain is None:
+        return
+    cmap, norm, levels = make_terrain_cmap()
+    terrain_shading = np.where(terrain.data > 0.5, terrain.data, np.nan)
+    ax.contourf(
+        decimate(terrain.lon, shade_stride),
+        decimate(terrain.lat, shade_stride),
+        decimate(terrain_shading, shade_stride),
+        levels=levels,
+        cmap=cmap,
+        norm=norm,
+        extend="max",
+        transform=DATA_CRS,
+        transform_first=True,
+        zorder=1,
+    )
+    # Positive model terrain can extend offshore. Match the drawn coastline,
+    # masking only the background below precipitation (zorder=3) and wind.
+    ax.add_feature(
+        terrain_ocean_mask(tuple(ax.get_extent(DATA_CRS))),
+        facecolor=ax.get_facecolor(),
+        edgecolor="none",
+        zorder=2,
+    )
+
+
 def unit_vector_components(u: np.ndarray, v: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     magnitude = np.hypot(u, v)
     valid = np.isfinite(magnitude) & (magnitude > 0.0)
@@ -1337,22 +1378,7 @@ def plot_fourpanel(
     msl = provider.surface(fhour, "msl" if config.key == "ecmwf_control" else "prmsl", "meanSea", 0)
     u10 = provider.surface(fhour, "10u", "heightAboveGround", 10)
     v10 = provider.surface(fhour, "10v", "heightAboveGround", 10)
-    terrain = provider.terrain()
-    if terrain is not None:
-        terrain_cmap, terrain_norm, terrain_levels = make_terrain_cmap()
-        terrain_land = np.where(terrain.data > 0.5, terrain.data, np.nan)
-        ax.contourf(
-            decimate(terrain.lon, shade_stride),
-            decimate(terrain.lat, shade_stride),
-            decimate(terrain_land, shade_stride),
-            levels=terrain_levels,
-            cmap=terrain_cmap,
-            norm=terrain_norm,
-            extend="max",
-            transform=DATA_CRS,
-            transform_first=True,
-            zorder=1,
-        )
+    plot_terrain_background(ax, provider.terrain(), shade_stride)
     cmap, norm, levels = make_precip_cmap()
     cf = ax.contourf(
         decimate(precip.lon, shade_stride),
