@@ -37,6 +37,8 @@ RECOVERY_HOLD = dt.timedelta(minutes=55)
 WARNING_REPEAT = dt.timedelta(hours=24)
 CRITICAL_REPEAT = dt.timedelta(hours=6)
 MAX_REPORTED_PROBLEMS = 8
+RUN_DELAY_GRACE = dt.timedelta(minutes=15)
+RUN_REMINDER = dt.timedelta(hours=4)
 RADARSAT_HEALTH_PATH = Path(
     os.environ.get(
         "RADARSAT_HEALTH_STATUS_PATH",
@@ -84,6 +86,36 @@ MODEL_MANIFESTS = (
     ManifestSpec("ecmwf_ensemble", "ECMWF Ensemble", dt.timedelta(hours=30)),
 )
 
+@dataclass(frozen=True)
+class RunSchedule:
+    model: str
+    cycle: int
+    label: str
+    products: tuple[str, ...]
+    hours: tuple[int, ...]
+    ready_local: tuple[int, int] | None = None
+
+
+# Website-ready targets, with room for rendering/upload after scheduled downloads.
+SHORT_HOURS = tuple(range(0, 49, 3))
+LONG_HOURS = tuple(range(0, 145, 3)) + tuple(range(150, 361, 6))
+RUN_SCHEDULES = (
+    *(RunSchedule("continental", cycle, "HRDPS", (
+        "continental_fourpanel", "continental_lightning_twopanel",
+        "continental_temperature", "continental_fwi2025_danger",
+    ), SHORT_HOURS) for cycle in (0, 6, 12, 18)),
+    RunSchedule("gefs_control", 0, "GEFS", ("gefs_control_fourpanel",), tuple(range(3, 49, 3)), (6, 0)),
+    RunSchedule("ecmwf_control", 0, "ECMWF control", (
+        "ecmwf_control_fourpanel", "ecmwf_control_convective_fourpanel",
+    ), LONG_HOURS, (6, 30)),
+    RunSchedule("ecmwf_control", 12, "ECMWF control", (
+        "ecmwf_control_fourpanel", "ecmwf_control_convective_fourpanel",
+    ), LONG_HOURS, (14, 0)),
+    RunSchedule("ecmwf_ensemble", 0, "ECMWF ensemble", ("ecmwf_ensemble_spread_500",), LONG_HOURS, (7, 0)),
+    RunSchedule("ecmwf_ensemble", 12, "ECMWF ensemble", ("ecmwf_ensemble_spread_500",), LONG_HOURS, (14, 30)),
+)
+
+
 REQUIRED_LAUNCH_AGENTS = (
     "com.greg.hrdps-continental-00",
     "com.greg.hrdps-continental-06",
@@ -126,7 +158,7 @@ LAUNCH_AGENT_LABELS = {
     "com.greg.fcst-r2-ecmwf_ensemble": "ECMWF Ensemble web publisher",
     "com.greg.fcst-r2-usage-monitor": "R2 usage monitor",
     "com.greg.fcst-r2-usage-weekly-report": "R2 weekly usage report",
-    "com.greg.fcst-pipeline-health": "Hourly forecast health monitor",
+    "com.greg.fcst-pipeline-health": "Ten-minute forecast health monitor",
     "com.greg.fcst-pipeline-health-daily": "Daily forecast health report",
 }
 
@@ -338,6 +370,126 @@ def check_hrdps_pipeline_status(
         )
 
 
+def publication_deadline(schedule: RunSchedule, init: dt.datetime) -> dt.datetime:
+    if schedule.ready_local is None:
+        return init + dt.timedelta(hours=5.5)
+    hour, minute = schedule.ready_local
+    return dt.datetime.combine(init.date(), dt.time(hour, minute), LOCAL_TZ).astimezone(dt.timezone.utc)
+
+
+def status_run_stamp(status: Mapping[str, object]) -> str:
+    for value in (status.get("stamp"), status.get("expected_stamp"), status.get("error")):
+        match = re.search(r"\b(\d{8}T\d{2}Z)\b|(?<!\d)(\d{8}T\d{2}Z)_", str(value or ""))
+        if match:
+            return match.group(1) or match.group(2)
+    return ""
+
+
+def plain_run_cause(status: Mapping[str, object], interrupted: bool = False) -> str:
+    error = str(status.get("error") or "").lower()
+    if "404" in error or "not found" in error or "missing" in error:
+        return "a required input file could not be found"
+    if "timeout" in error or "timed out" in error:
+        return "the download server did not respond in time" if any(
+            word in error for word in ("http", "download", "connection")
+        ) else "the job ran out of time before finishing"
+    if any(word in error for word in ("connection", "network", "name resolution", "urlopen")):
+        return "the download connection failed"
+    if "no space" in error:
+        return "the computer ran out of storage space"
+    if "permission" in error:
+        return "the job could not access a required file or service"
+    if status.get("status") == "failed":
+        return "the processing job stopped with an error; the exact cause needs investigation"
+    if interrupted:
+        return "the processing job stopped before finishing"
+    if status.get("status") in {"success", "complete"}:
+        return "the plots are ready locally but are not all available on the website yet"
+    if status.get("status") == "waiting_upstream":
+        return "we are still waiting for the model's input files"
+    if status.get("status") in {"degraded", "partial"}:
+        return "the job finished without producing all of the expected plots"
+    if status.get("status") == "rendering":
+        return "the forecast plots are still being drawn"
+    if status.get("status") in {"starting", "running"}:
+        return "downloading or plotting is still in progress; no failure has been reported"
+    return "the scheduled job has not reported starting; the cause is not yet known"
+
+
+def run_is_published(run: Mapping[str, object], schedule: RunSchedule) -> bool:
+    if not isinstance(run, dict):
+        return False
+    products = run.get("products") or {}
+    if not isinstance(products, dict):
+        return False
+    return all(
+        isinstance(products.get(key), dict)
+        and isinstance(products[key].get("hours"), list)
+        and set(schedule.hours).issubset(products[key]["hours"])
+        for key in schedule.products
+    )
+
+
+def check_scheduled_run(
+    schedule: RunSchedule,
+    now: dt.datetime,
+    manifest: Mapping[str, object],
+    state_root: Path | None = None,
+    pid_checker: Callable[[int], bool] = process_exists,
+    *,
+    init: dt.datetime | None = None,
+) -> CheckResult:
+    init = init or now.astimezone(dt.timezone.utc).replace(hour=schedule.cycle, minute=0, second=0, microsecond=0)
+    if init > now:
+        init -= dt.timedelta(days=1)
+    stamp = init.strftime("%Y%m%dT%HZ")
+    key = f"run.{schedule.model}.{stamp}"
+    label = f"{schedule.label} {schedule.cycle:02d}Z run for {init:%b %d}"
+    deadline = publication_deadline(schedule, init)
+    published = [run for run in manifest.get("runs", ()) if run_is_published(run, schedule)]
+    if any(str(run.get("stamp", "")) >= stamp for run in published):
+        return CheckResult(key, label, "ok", "This run or a newer complete run is available on the website.")
+
+    path = (state_root or REPO_ROOT / "logs/state") / f"{schedule.model}_{schedule.cycle:02d}.status.json"
+    status = read_state(path)
+    if status_run_stamp(status) != stamp:
+        status = {}
+    state = status.get("status")
+    active = state in {"starting", "running", "waiting_upstream", "rendering"}
+    pid = int(status.get("pid") or 0)
+    interrupted = active and pid > 0 and not pid_checker(pid)
+    stopped = state == "failed" or interrupted
+    stalled = False
+    if active and status.get("heartbeat_at_utc"):
+        stalled = now - parse_time(status["heartbeat_at_utc"]) > dt.timedelta(minutes=45)
+    delay = now - deadline
+    if not stopped and not stalled and delay < RUN_DELAY_GRACE:
+        previous_init = init - dt.timedelta(days=1)
+        previous_stamp = previous_init.strftime("%Y%m%dT%HZ")
+        if not any(str(run.get("stamp", "")) >= previous_stamp for run in published):
+            # Starting a new cycle must not clear an unresolved missing-run alert.
+            return check_scheduled_run(schedule, now, manifest, state_root, pid_checker, init=previous_init)
+        return CheckResult(key, label, "ok", f"Expected on the website by {deadline.astimezone(LOCAL_TZ):%H:%M %Z}.")
+
+    cause = plain_run_cause(status, interrupted)
+    if stalled and not stopped:
+        cause = "the processing job has stopped reporting progress"
+    if delay.total_seconds() > 0:
+        hours = round(delay.total_seconds() / 3600, 1)
+        duration = "1 hour" if hours == 1 else f"{hours:.1f} hours"
+        summary = f"{label} is {duration} late because {cause}."
+    else:
+        summary = f"{label} has stopped because {cause}." if stopped else f"{label} appears stuck because {cause}."
+    summary += f" Expected on the website by {deadline.astimezone(LOCAL_TZ):%b %d at %H:%M %Z}."
+    if published:
+        latest = max(published, key=lambda run: str(run.get("stamp", "")))
+        fallback = dt.datetime.strptime(latest["stamp"], "%Y%m%dT%HZ")
+        summary += f" The latest complete forecast available is {fallback:%b %d %HZ}."
+    else:
+        summary += " No complete forecast from this model could be confirmed on the website."
+    return CheckResult(key, label, "critical" if delay >= dt.timedelta(hours=4) else "warning", summary, immediate=True)
+
+
 def project_data_root(environ: Mapping[str, str] | None = None) -> Path:
     env = os.environ if environ is None else environ
     direct = env.get("FCSTGRAPHICS_DATA_ROOT", "").strip()
@@ -540,14 +692,38 @@ def run_checks(
     loader: Callable[[str], Mapping[str, object]] = fetch_json,
     include_services: bool = True,
 ) -> list[CheckResult]:
+    manifests: dict[str, Mapping[str, object]] = {}
+
+    def cached_loader(url: str) -> Mapping[str, object]:
+        if url not in manifests:
+            manifests[url] = loader(url)
+        return manifests[url]
+
     checks = [check_storage(data_root)]
-    checks.extend(check_model_manifest(spec, now, base_url, loader) for spec in MODEL_MANIFESTS)
+    checks.extend(check_model_manifest(spec, now, base_url, cached_loader) for spec in MODEL_MANIFESTS)
+    readable = {check.key.removeprefix("manifest.") for check in checks if
+                check.key.startswith("manifest.") and "manifest check failed" not in check.summary}
+    publication_checks = []
+    for schedule in RUN_SCHEDULES:
+        manifest = manifests.get(f"{base_url.rstrip('/')}/manifests/{schedule.model}.json")
+        if schedule.model in readable:
+            publication_checks.append(check_scheduled_run(schedule, now, manifest))
+    # Per-run checks replace age-only alerts when the public catalogue was readable.
+    checks = [check for check in checks if not (
+        check.key.removeprefix("manifest.") in readable and "manifest check failed" not in check.summary
+    )]
+    checks.extend(publication_checks)
     checks.append(check_fire_manifest(now, base_url, loader))
     checks.append(check_lightning_archive(now, data_root))
     checks.append(check_cwfis_anchors(now, data_root))
-    checks.extend(check_hrdps_pipeline_status(spec, now) for spec in HRDPS_PIPELINE_STATUSES)
     if include_services:
-        checks.extend(check_launch_agent(label, auto_repair) for label in REQUIRED_LAUNCH_AGENTS)
+        for label in REQUIRED_LAUNCH_AGENTS:
+            check = check_launch_agent(label, auto_repair)
+            modeled_job = label.startswith(("com.greg.hrdps-continental-", "com.greg.gefs-control-fourpanel-",
+                                            "com.greg.ecmwf-control-fourpanel-", "com.greg.ecmwf-ensemble-spread-"))
+            if modeled_job and check.summary.startswith("last scheduled attempt failed"):
+                continue  # Current run checks already distinguish active from superseded failures.
+            checks.append(check)
     return checks
 
 
@@ -766,10 +942,15 @@ def report_body(checks: list[CheckResult], now: dt.datetime, daily: bool) -> str
             lines.append(f"Disk: {storage.summary}")
         return "\n".join(lines)
 
-    lines = [f"Status: {level}", f"Checked: {now.astimezone(LOCAL_TZ):%Y-%m-%d %H:%M %Z}"]
+    run_only = bool(problems) and all(check.key.startswith("run.") for check in problems)
+    lines = [] if run_only else [f"Status: {level}", f"Checked: {now.astimezone(LOCAL_TZ):%Y-%m-%d %H:%M %Z}"]
     if problems:
-        lines.append(f"Problems: {len(problems)}")
+        if not run_only:
+            lines.append(f"Problems: {len(problems)}")
         for check in problems[:MAX_REPORTED_PROBLEMS]:
+            if check.key.startswith("run."):
+                lines.append(check.summary)
+                continue
             lines.append(f"[{check.level.upper()}] {check.label}")
             lines.append(f"Issue: {check.summary}")
             lines.append(f"Impact: {operational_impact(check)}")
@@ -813,7 +994,9 @@ def notification_decision(
             last_notified = parse_time(previous_state["last_notification_at"])
         except (KeyError, TypeError, ValueError):
             return "reminder", ""
-        repeat = CRITICAL_REPEAT if level == "critical" else WARNING_REPEAT
+        repeat = RUN_REMINDER if any(key.startswith("run.") for key in signature_levels(signature)) else (
+            CRITICAL_REPEAT if level == "critical" else WARNING_REPEAT
+        )
         if now - last_notified >= repeat:
             return "reminder", ""
         return None, ""
@@ -944,13 +1127,17 @@ def run_monitor(args: argparse.Namespace) -> int:
             title = "Forecast Graphics Health Recovered"
         else:
             title = "Forecast Graphics Daily Health"
+        body = report_body(checks, now, args.always_notify)
+        payload["notification_title"] = title
+        payload["notification_body"] = body
         try:
-            telegram_notify.send_message(
+            receipt = telegram_notify.send_message(
                 title,
-                report_body(checks, now, args.always_notify),
+                body,
                 url=SITE_URL if signature else None,
             )
             notification_sent = True
+            payload["telegram_receipt"] = receipt
             payload["notified_signature"] = signature
             payload["last_notification_at"] = now.isoformat().replace("+00:00", "Z")
             payload.pop("recovery_since", None)
@@ -959,6 +1146,7 @@ def run_monitor(args: argparse.Namespace) -> int:
             print(f"Telegram notification failed: {exc}", flush=True)
 
     payload["notification_sent"] = notification_sent
+    payload["notification_delivery"] = "accepted_by_telegram" if notification_sent else "failed" if notification_error else "not_attempted"
     payload["notification_error"] = notification_error
     write_json(args.latest_path, payload)
     write_json(args.state_path, payload)

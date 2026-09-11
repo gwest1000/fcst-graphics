@@ -25,7 +25,7 @@ def send_message(
     url: str | None = None,
     environ: Mapping[str, str] | None = None,
     timeout: float = 15.0,
-) -> None:
+) -> dict[str, object]:
     env = os.environ if environ is None else environ
     token = env.get("TELEGRAM_BOT_TOKEN", "").strip()
     chat_id = env.get("TELEGRAM_CHAT_ID", "").strip()
@@ -41,6 +41,7 @@ def send_message(
             "chat_id": chat_id,
             "text": text,
             "disable_web_page_preview": True,
+            "disable_notification": False,
         }
     ).encode("utf-8")
     request = urllib.request.Request(
@@ -49,8 +50,13 @@ def send_message(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        result = json.load(response)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            result = json.load(response)
+    except Exception as exc:
+        raise RuntimeError(str(exc).replace(token, "[redacted]")) from None
     if not isinstance(result, dict) or not result.get("ok"):
         description = result.get("description", "unknown Telegram error") if isinstance(result, dict) else "invalid response"
         raise RuntimeError(f"Telegram notification failed: {description}")
+    message = result.get("result") or {}
+    return {"status": "accepted_by_telegram", "message_id": message.get("message_id"), "date": message.get("date")}

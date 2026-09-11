@@ -17,6 +17,141 @@ NOW = dt.datetime(2026, 8, 17, 22, tzinfo=dt.timezone.utc)
 
 
 class PipelineHealthTests(unittest.TestCase):
+    def scheduled_check(self, now, status=None, runs=(), schedule=None, alive=True):
+        schedule = schedule or health.RUN_SCHEDULES[2]
+        with TemporaryDirectory() as directory:
+            if status is not None:
+                path = Path(directory) / f"{schedule.model}_{schedule.cycle:02d}.status.json"
+                path.write_text(json.dumps(status))
+            return health.check_scheduled_run(
+                schedule, now, {"runs": list(runs)}, Path(directory), lambda _pid: alive
+            )
+
+    def published_run(self, stamp, schedule=None):
+        schedule = schedule or health.RUN_SCHEDULES[2]
+        return {"stamp": stamp, "products": {key: {"hours": list(schedule.hours)} for key in schedule.products}}
+
+    def test_schedule_products_and_hours_match_operational_products(self):
+        import publish_hrdps_west as publishing
+        for schedule in health.RUN_SCHEDULES:
+            for product in schedule.products:
+                self.assertIn(product, publishing.PRODUCTS_BY_MODEL[schedule.model])
+                self.assertEqual(schedule.hours, tuple(publishing.PRODUCTS[product].hours))
+
+    def test_website_deadlines_respect_model_schedule_and_daylight_saving(self):
+        init = dt.datetime(2026, 9, 11, 12, tzinfo=dt.timezone.utc)
+        self.assertEqual(health.publication_deadline(health.RUN_SCHEDULES[2], init), init + dt.timedelta(hours=5.5))
+        ecmwf = next(s for s in health.RUN_SCHEDULES if s.model == "ecmwf_control" and s.cycle == 0)
+        for month, expected_utc_hour in ((1, 14), (9, 13)):
+            init = dt.datetime(2026, month, 11, tzinfo=dt.timezone.utc)
+            deadline = health.publication_deadline(ecmwf, init)
+            self.assertEqual((deadline.hour, deadline.minute), (expected_utc_hour, 30))
+
+    def test_delayed_run_alerts_even_with_a_fresh_heartbeat(self):
+        now = NOW.replace(hour=18)
+        status = {"stamp": "20260817T12Z", "status": "waiting_upstream", "pid": 1, "heartbeat_at_utc": now.isoformat()}
+        check = self.scheduled_check(now, status)
+        self.assertEqual(check.level, "warning")
+        self.assertTrue(check.immediate)
+        self.assertIn("0.5 hours late", check.summary)
+        self.assertIn("waiting for the model's input files", check.summary)
+        effective, _ = health.apply_debounce([check], {}, now)
+        self.assertEqual(effective[0].level, "warning")
+
+    def test_normal_model_latency_and_short_delays_do_not_alert(self):
+        for now in (NOW.replace(hour=15), NOW.replace(hour=17, minute=40)):
+            self.assertEqual(self.scheduled_check(now, runs=[self.published_run("20260817T06Z")]).level, "ok")
+
+    def test_new_cycle_does_not_clear_an_unresolved_missing_run(self):
+        now = NOW.replace(hour=12, minute=10)
+        check = self.scheduled_check(now, runs=[self.published_run("20260816T06Z")])
+        self.assertEqual(check.level, "critical")
+        self.assertIn("20260816T12Z", check.key)
+
+    def test_stopped_run_alerts_before_deadline_with_plain_cause_and_recovered_stamp(self):
+        check = self.scheduled_check(NOW.replace(hour=15), {
+            "stamp": None, "status": "failed",
+            "error": "Failed https://example.test/20260817T12Z_MSC_HRDPS_DPT.grib2: 404 Client Error",
+        })
+        self.assertEqual(check.level, "warning")
+        self.assertTrue(check.immediate)
+        self.assertIn("HRDPS 12Z run for Aug 17 has stopped", check.summary)
+        self.assertIn("required input file could not be found", check.summary)
+        body = health.report_body([check], NOW, daily=False)
+        for jargon in ("404", "https://example", "manifest", "Issue:", "pipeline"):
+            self.assertNotIn(jargon, body)
+
+    def test_old_error_is_not_used_as_the_cause_for_a_new_missing_run(self):
+        check = self.scheduled_check(NOW.replace(hour=18), {"stamp": "20260816T12Z", "status": "failed", "error": "404"})
+        self.assertIn("has not reported starting", check.summary)
+        self.assertNotIn("input file", check.summary)
+
+    def test_newer_complete_publication_suppresses_historical_failure(self):
+        check = self.scheduled_check(NOW, {"stamp": "20260817T12Z", "status": "failed"},
+                                     [self.published_run("20260817T18Z")])
+        self.assertEqual(check.level, "ok")
+
+    def test_partial_publication_and_local_success_do_not_hide_missing_images(self):
+        run = self.published_run("20260817T12Z")
+        run["products"]["continental_fourpanel"]["hours"].remove(24)
+        check = self.scheduled_check(NOW.replace(hour=18), {"stamp": "20260817T12Z", "status": "success"}, [run])
+        self.assertEqual(check.level, "warning")
+        self.assertIn("ready locally", check.summary)
+        self.assertIn("not all available on the website", check.summary)
+
+    def test_interrupted_current_run_alerts_and_each_cycle_has_its_own_incident(self):
+        first = self.scheduled_check(NOW.replace(hour=15), {"stamp": "20260817T12Z", "status": "running", "pid": 123}, alive=False)
+        second = self.scheduled_check(NOW.replace(hour=15) + dt.timedelta(days=1), {"stamp": "20260818T12Z", "status": "failed"})
+        self.assertTrue(first.immediate)
+        self.assertIn("stopped before finishing", first.summary)
+        reason, _ = health.notification_decision(
+            signature=health.problem_signature([second]), notified_signature=health.problem_signature([first]),
+            level="warning", now=NOW, previous_state={"last_notification_at": NOW.isoformat()}, always_notify=False,
+        )
+        self.assertEqual(reason, "alert")
+
+    def test_model_run_reminders_wait_four_hours(self):
+        signature = "run.continental.20260817T12Z:warning"
+        for hours, expected in ((1, None), (4, "reminder")):
+            reason, _ = health.notification_decision(
+                signature=signature, notified_signature=signature, level="warning", now=NOW,
+                previous_state={"last_notification_at": (NOW - dt.timedelta(hours=hours)).isoformat()}, always_notify=False,
+            )
+            self.assertEqual(reason, expected)
+
+    @mock.patch("monitor_pipeline_health.telegram_notify.send_message")
+    @mock.patch("monitor_pipeline_health.run_checks")
+    @mock.patch("monitor_pipeline_health.utc_now", return_value=NOW)
+    def test_notification_audit_records_receipt_and_retries_unaccepted_alert(self, _now, checks, send):
+        checks.return_value = [health.CheckResult("run.continental.20260817T12Z", "HRDPS", "warning", "HRDPS is late.", immediate=True)]
+        with TemporaryDirectory() as directory:
+            args = health.parse_args([
+                "--operational", "--state-path", f"{directory}/state.json",
+                "--latest-path", f"{directory}/latest.json", "--history-path", f"{directory}/history.jsonl",
+            ])
+            send.side_effect = RuntimeError("connection failed")
+            health.run_monitor(args)
+            failed = json.loads(args.state_path.read_text())
+            self.assertEqual(failed["notification_delivery"], "failed")
+            self.assertEqual(failed["notified_signature"], "")
+            send.side_effect = None
+            send.return_value = {"status": "accepted_by_telegram", "message_id": 123, "date": 100}
+            health.run_monitor(args)
+            accepted = json.loads(args.state_path.read_text())
+            self.assertEqual(accepted["notification_delivery"], "accepted_by_telegram")
+            self.assertEqual(accepted["telegram_receipt"]["message_id"], 123)
+            self.assertIn("HRDPS is late.", accepted["notification_body"])
+            self.assertEqual(send.call_count, 2)
+
+    @mock.patch("monitor_pipeline_health.check_storage", return_value=health.CheckResult("storage", "Storage", "ok", "ok"))
+    @mock.patch("monitor_pipeline_health.check_lightning_archive", return_value=health.CheckResult("lightning", "Lightning", "ok", "ok"))
+    @mock.patch("monitor_pipeline_health.check_cwfis_anchors", return_value=health.CheckResult("fwi", "FWI", "ok", "ok"))
+    def test_unreadable_manifest_does_not_create_speculative_run_delays(self, *_mocks):
+        checks = health.run_checks(NOW, base_url="https://example.test", data_root=Path("/tmp"),
+                                   include_services=False, loader=mock.Mock(side_effect=RuntimeError("offline")))
+        self.assertEqual(sum(c.key.startswith("manifest.") and c.level == "critical" for c in checks), 4)
+        self.assertFalse(any(c.key.startswith("run.") for c in checks))
+
     def test_manual_invocation_is_isolated_from_operational_state(self):
         with mock.patch.dict("os.environ", {"TMPDIR": "/tmp"}):
             args = health.isolate_diagnostic_invocation(health.parse_args([]))
@@ -365,8 +500,8 @@ class PipelineHealthTests(unittest.TestCase):
         response.__enter__.return_value = response
         response.__exit__.return_value = False
         urlopen.return_value = response
-        with mock.patch("telegram_notify.json.load", return_value={"ok": True}):
-            telegram_notify.send_message(
+        with mock.patch("telegram_notify.json.load", return_value={"ok": True, "result": {"message_id": 42, "date": 123}}):
+            receipt = telegram_notify.send_message(
                 "Title",
                 "Body",
                 environ={"TELEGRAM_BOT_TOKEN": "secret", "TELEGRAM_CHAT_ID": "123"},
@@ -376,6 +511,14 @@ class PipelineHealthTests(unittest.TestCase):
         payload = json.loads(request.data)
         self.assertEqual(payload["chat_id"], "123")
         self.assertEqual(payload["text"], "Title\n\nBody")
+        self.assertFalse(payload["disable_notification"])
+        self.assertEqual(receipt, {"status": "accepted_by_telegram", "message_id": 42, "date": 123})
+
+    @mock.patch("telegram_notify.urllib.request.urlopen", side_effect=RuntimeError("could not connect to /botsecret/sendMessage"))
+    def test_delivery_errors_do_not_leak_bot_token(self, _urlopen):
+        with self.assertRaisesRegex(RuntimeError, r"\[redacted\]") as caught:
+            telegram_notify.send_message("Title", "Body", environ={"TELEGRAM_BOT_TOKEN": "secret", "TELEGRAM_CHAT_ID": "123"})
+        self.assertNotIn("secret", str(caught.exception))
 
 
 if __name__ == "__main__":

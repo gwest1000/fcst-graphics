@@ -110,19 +110,34 @@ credential. Revoke the temporary token after the command succeeds.
 
 ## Pipeline health monitoring
 
-`monitor_pipeline_health.py` checks the complete forecast pipeline each hour:
+`monitor_pipeline_health.py` checks the complete forecast pipeline every 10 minutes:
 required launch agents, the external data volume, public R2 model manifests,
 BCWS fire activity, the ECCC lightning archive, and daily CWFIS FFMC/DMC/DC
 anchors. Missing launch agents are reloaded automatically. Disk loss and failed
-scheduler repair alert immediately. A scheduler exit code, successful automatic
-repair, or remote failure must persist for 55 minutes before it sends a push
-alert. This is elapsed-time based, so the daily check cannot accidentally count
-as a second hourly failure. Critical incidents repeat every 6 hours, warnings
-repeat every 24 hours, and recovery must remain stable for 55 minutes. Related
+scheduler repair alert immediately. Current model jobs that fail or stop alert
+on the next check. Missing or incomplete runs alert after a 15-minute grace
+period beyond their website-ready target, even if the job is still running.
+Targets reflect local processing schedules, not guarantees from the model providers:
+
+- HRDPS: 5.5 hours after each 00/06/12/18Z initialization.
+- GEFS 00Z: 06:00 Pacific.
+- ECMWF control: 06:30 Pacific for 00Z; 14:00 Pacific for 12Z.
+- ECMWF ensemble: 07:00 Pacific for 00Z; 14:30 Pacific for 12Z.
+
+Alerts name the model, dated run, hours past the target, plain-English cause,
+and latest complete fallback. Publication requires every expected forecast hour
+and product; a partial upload does not count as recovery. A newer complete run
+supersedes historical failed cycles. Each dated run has its own incident identity.
+Model-run reminders repeat every 4 hours; other critical incidents repeat every
+6 hours and warnings every 24 hours. Successful automatic repairs and transient
+remote failures must persist for 55 minutes before alerting, and recovery must
+remain stable for 55 minutes. These are elapsed-time checks, not poll counts. Related
 public-manifest or scheduler failures are grouped into one actionable incident,
 with a bounded message size and a link to the graphics page. A shared lock
-prevents the hourly and daily processes from racing. Each run is retained in a
-rotating JSONL history so an alert can be investigated after recovery.
+prevents the ten-minute and daily processes from racing. Each run is retained in a
+rotating JSONL history so an alert can be investigated after recovery. Notification
+history includes the exact message text and Telegram's message ID/acceptance time.
+Acceptance confirms Telegram received the message, not that a phone displayed it.
 Only the launch-agent wrapper passes `--operational`; direct/manual invocations
 are isolated from durable incident state, cannot repair services, and cannot
 send Telegram alerts.

@@ -58,12 +58,12 @@ DAILY_SCHEDULE='<key>StartCalendarInterval</key>
     <key>Minute</key>
     <integer>5</integer>
   </dict>'
-HOURLY_SCHEDULE='<key>StartInterval</key>
-  <integer>3600</integer>
+MONITOR_SCHEDULE='<key>StartInterval</key>
+  <integer>600</integer>
   <key>RunAtLoad</key>
   <true/>'
 
-# Install the daily service first so the hourly RunAtLoad check sees both labels.
+# Install the daily service first so the RunAtLoad check sees both labels.
 install_agent \
   "com.greg.fcst-pipeline-health-daily" \
   "${DAILY_SCHEDULE}" \
@@ -71,7 +71,7 @@ install_agent \
   "pipeline_health_daily"
 install_agent \
   "com.greg.fcst-pipeline-health" \
-  "${HOURLY_SCHEDULE}" \
+  "${MONITOR_SCHEDULE}" \
   '' \
   "pipeline_health"
 
