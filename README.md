@@ -114,9 +114,10 @@ credential. Revoke the temporary token after the command succeeds.
 required launch agents, the external data volume, public R2 model manifests,
 BCWS fire activity, the ECCC lightning archive, and daily CWFIS FFMC/DMC/DC
 anchors. Missing launch agents are reloaded automatically. Disk loss and failed
-scheduler repair alert immediately. Current model jobs that fail or stop alert
-on the next check. Missing or incomplete runs alert after a 15-minute grace
-period beyond their website-ready target, even if the job is still running.
+scheduler repair are eligible for alerts immediately, subject to the hourly limit
+below. Missing or incomplete model runs only alert once they are at least one hour
+past their website-ready target. This also applies to failed, stopped, or stalled
+jobs; a fresh heartbeat does not suppress an overdue-run alert.
 Targets reflect local processing schedules, not guarantees from the model providers:
 
 - HRDPS: 5.5 hours after each 00/06/12/18Z initialization.
@@ -128,6 +129,11 @@ Alerts name the model, dated run, hours past the target, plain-English cause,
 and latest complete fallback. Publication requires every expected forecast hour
 and product; a partial upload does not count as recovery. A newer complete run
 supersedes historical failed cycles. Each dated run has its own incident identity.
+All health notifications are limited to one per rolling hour, including new or
+escalating incidents, recovery messages, and daily summaries. Problems detected
+during that hour remain pending and are reported on the next eligible check if
+still present. The daily summary is skipped if another notification was sent
+within the preceding hour.
 Model-run reminders repeat every 4 hours; other critical incidents repeat every
 6 hours and warnings every 24 hours. Successful automatic repairs and transient
 remote failures must persist for 55 minutes before alerting, and recovery must
@@ -144,8 +150,9 @@ send Telegram alerts.
 
 Telegram alerts reuse `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID` from the
 existing Monitor Search environment, so credentials are not copied into this
-repository. A concise daily report is sent at 07:05 Pacific even when every
-check is healthy. Install or refresh both launch agents with:
+repository. A concise daily report is scheduled at 07:05 Pacific even when every
+check is healthy, subject to the same hourly limit. Install or refresh both launch
+agents with:
 
 ```bash
 scripts/launchd/install_pipeline_health_monitor.sh

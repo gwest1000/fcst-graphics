@@ -37,8 +37,9 @@ RECOVERY_HOLD = dt.timedelta(minutes=55)
 WARNING_REPEAT = dt.timedelta(hours=24)
 CRITICAL_REPEAT = dt.timedelta(hours=6)
 MAX_REPORTED_PROBLEMS = 8
-RUN_DELAY_GRACE = dt.timedelta(minutes=15)
+RUN_DELAY_GRACE = dt.timedelta(hours=1)
 RUN_REMINDER = dt.timedelta(hours=4)
+MIN_NOTIFICATION_INTERVAL = dt.timedelta(hours=1)
 RADARSAT_HEALTH_PATH = Path(
     os.environ.get(
         "RADARSAT_HEALTH_STATUS_PATH",
@@ -463,7 +464,7 @@ def check_scheduled_run(
     if active and status.get("heartbeat_at_utc"):
         stalled = now - parse_time(status["heartbeat_at_utc"]) > dt.timedelta(minutes=45)
     delay = now - deadline
-    if not stopped and not stalled and delay < RUN_DELAY_GRACE:
+    if delay < RUN_DELAY_GRACE:
         previous_init = init - dt.timedelta(days=1)
         previous_stamp = previous_init.strftime("%Y%m%dT%HZ")
         if not any(str(run.get("stamp", "")) >= previous_stamp for run in published):
@@ -982,22 +983,25 @@ def notification_decision(
     previous_state: Mapping[str, object],
     always_notify: bool,
 ) -> tuple[str | None, str]:
-    if always_notify:
+    try:
+        last_notified = parse_time(previous_state["last_notification_at"])
+    except (KeyError, TypeError, ValueError):
+        last_notified = None
+    can_notify = last_notified is None or now - last_notified >= MIN_NOTIFICATION_INTERVAL
+    if always_notify and can_notify:
         return "daily", ""
 
     if signature:
         if signature_has_new_or_escalated_problem(signature, notified_signature):
-            return "alert", ""
+            return "alert" if can_notify else None, ""
         if signature != notified_signature:
             return None, ""
-        try:
-            last_notified = parse_time(previous_state["last_notification_at"])
-        except (KeyError, TypeError, ValueError):
+        if last_notified is None:
             return "reminder", ""
         repeat = RUN_REMINDER if any(key.startswith("run.") for key in signature_levels(signature)) else (
             CRITICAL_REPEAT if level == "critical" else WARNING_REPEAT
         )
-        if now - last_notified >= repeat:
+        if can_notify and now - last_notified >= repeat:
             return "reminder", ""
         return None, ""
 
@@ -1010,7 +1014,7 @@ def notification_decision(
     except (TypeError, ValueError):
         first_healthy = now
         recovery_since = now.isoformat().replace("+00:00", "Z")
-    if now - first_healthy >= RECOVERY_HOLD:
+    if can_notify and now - first_healthy >= RECOVERY_HOLD:
         return "recovery", recovery_since
     return None, recovery_since
 
@@ -1107,9 +1111,12 @@ def run_monitor(args: argparse.Namespace) -> int:
         previous_state=state,
         always_notify=args.always_notify,
     )
-    if reason is None and signature and signature != notified_signature:
+    if (
+        reason is None and signature and signature != notified_signature
+        and not signature_has_new_or_escalated_problem(signature, notified_signature)
+    ):
         # A strictly smaller or lower-severity problem set is partial recovery,
-        # not a new incident. Advance the reminder baseline without pushing.
+        # not a new incident. Keep rate-limited new incidents unacknowledged.
         payload["notified_signature"] = signature
     if recovery_since:
         payload["recovery_since"] = recovery_since

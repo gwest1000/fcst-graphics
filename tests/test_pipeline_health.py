@@ -48,19 +48,36 @@ class PipelineHealthTests(unittest.TestCase):
             self.assertEqual((deadline.hour, deadline.minute), (expected_utc_hour, 30))
 
     def test_delayed_run_alerts_even_with_a_fresh_heartbeat(self):
-        now = NOW.replace(hour=18)
+        now = NOW.replace(hour=18, minute=30)
         status = {"stamp": "20260817T12Z", "status": "waiting_upstream", "pid": 1, "heartbeat_at_utc": now.isoformat()}
         check = self.scheduled_check(now, status)
         self.assertEqual(check.level, "warning")
         self.assertTrue(check.immediate)
-        self.assertIn("0.5 hours late", check.summary)
+        self.assertIn("1 hour late", check.summary)
         self.assertIn("waiting for the model's input files", check.summary)
         effective, _ = health.apply_debounce([check], {}, now)
         self.assertEqual(effective[0].level, "warning")
 
     def test_normal_model_latency_and_short_delays_do_not_alert(self):
-        for now in (NOW.replace(hour=15), NOW.replace(hour=17, minute=40)):
+        for now in (NOW.replace(hour=15), NOW.replace(hour=17, minute=40), NOW.replace(hour=18, minute=29, second=59)):
             self.assertEqual(self.scheduled_check(now, runs=[self.published_run("20260817T06Z")]).level, "ok")
+
+    def test_failed_interrupted_and_stalled_runs_wait_until_one_hour_late(self):
+        statuses = (
+            ({"status": "failed", "error": "404"}, True),
+            ({"status": "running", "pid": 123}, False),
+            ({"status": "rendering", "pid": 123, "heartbeat_at_utc": NOW.replace(hour=14).isoformat()}, True),
+        )
+        for status, alive in statuses:
+            status = {"stamp": "20260817T12Z", **status}
+            for now, expected in (
+                (NOW.replace(hour=15), "ok"),
+                (NOW.replace(hour=18, minute=29, second=59), "ok"),
+                (NOW.replace(hour=18, minute=30), "warning"),
+            ):
+                with self.subTest(status=status, now=now):
+                    check = self.scheduled_check(now, status, [self.published_run("20260817T06Z")], alive=alive)
+                    self.assertEqual(check.level, expected)
 
     def test_new_cycle_does_not_clear_an_unresolved_missing_run(self):
         now = NOW.replace(hour=12, minute=10)
@@ -68,21 +85,21 @@ class PipelineHealthTests(unittest.TestCase):
         self.assertEqual(check.level, "critical")
         self.assertIn("20260816T12Z", check.key)
 
-    def test_stopped_run_alerts_before_deadline_with_plain_cause_and_recovered_stamp(self):
-        check = self.scheduled_check(NOW.replace(hour=15), {
+    def test_stopped_run_alerts_when_one_hour_late_with_plain_cause_and_recovered_stamp(self):
+        check = self.scheduled_check(NOW.replace(hour=18, minute=30), {
             "stamp": None, "status": "failed",
             "error": "Failed https://example.test/20260817T12Z_MSC_HRDPS_DPT.grib2: 404 Client Error",
         })
         self.assertEqual(check.level, "warning")
         self.assertTrue(check.immediate)
-        self.assertIn("HRDPS 12Z run for Aug 17 has stopped", check.summary)
+        self.assertIn("HRDPS 12Z run for Aug 17 is 1 hour late", check.summary)
         self.assertIn("required input file could not be found", check.summary)
         body = health.report_body([check], NOW, daily=False)
         for jargon in ("404", "https://example", "manifest", "Issue:", "pipeline"):
             self.assertNotIn(jargon, body)
 
     def test_old_error_is_not_used_as_the_cause_for_a_new_missing_run(self):
-        check = self.scheduled_check(NOW.replace(hour=18), {"stamp": "20260816T12Z", "status": "failed", "error": "404"})
+        check = self.scheduled_check(NOW.replace(hour=18, minute=30), {"stamp": "20260816T12Z", "status": "failed", "error": "404"})
         self.assertIn("has not reported starting", check.summary)
         self.assertNotIn("input file", check.summary)
 
@@ -94,19 +111,19 @@ class PipelineHealthTests(unittest.TestCase):
     def test_partial_publication_and_local_success_do_not_hide_missing_images(self):
         run = self.published_run("20260817T12Z")
         run["products"]["continental_fourpanel"]["hours"].remove(24)
-        check = self.scheduled_check(NOW.replace(hour=18), {"stamp": "20260817T12Z", "status": "success"}, [run])
+        check = self.scheduled_check(NOW.replace(hour=18, minute=30), {"stamp": "20260817T12Z", "status": "success"}, [run])
         self.assertEqual(check.level, "warning")
         self.assertIn("ready locally", check.summary)
         self.assertIn("not all available on the website", check.summary)
 
     def test_interrupted_current_run_alerts_and_each_cycle_has_its_own_incident(self):
-        first = self.scheduled_check(NOW.replace(hour=15), {"stamp": "20260817T12Z", "status": "running", "pid": 123}, alive=False)
-        second = self.scheduled_check(NOW.replace(hour=15) + dt.timedelta(days=1), {"stamp": "20260818T12Z", "status": "failed"})
+        first = self.scheduled_check(NOW.replace(hour=18, minute=30), {"stamp": "20260817T12Z", "status": "running", "pid": 123}, alive=False)
+        second = self.scheduled_check(NOW.replace(hour=18, minute=30) + dt.timedelta(days=1), {"stamp": "20260818T12Z", "status": "failed"})
         self.assertTrue(first.immediate)
         self.assertIn("stopped before finishing", first.summary)
         reason, _ = health.notification_decision(
             signature=health.problem_signature([second]), notified_signature=health.problem_signature([first]),
-            level="warning", now=NOW, previous_state={"last_notification_at": NOW.isoformat()}, always_notify=False,
+            level="warning", now=NOW, previous_state={"last_notification_at": (NOW - dt.timedelta(hours=1)).isoformat()}, always_notify=False,
         )
         self.assertEqual(reason, "alert")
 
@@ -459,7 +476,7 @@ class PipelineHealthTests(unittest.TestCase):
             notified_signature="a:warning",
             level="warning",
             now=NOW,
-            previous_state={"last_notification_at": NOW.isoformat()},
+            previous_state={"last_notification_at": (NOW - dt.timedelta(hours=1)).isoformat()},
             always_notify=False,
         )
         self.assertEqual(reason, "alert")
@@ -469,10 +486,73 @@ class PipelineHealthTests(unittest.TestCase):
             notified_signature="a:warning",
             level="critical",
             now=NOW,
-            previous_state={"last_notification_at": NOW.isoformat()},
+            previous_state={"last_notification_at": (NOW - dt.timedelta(hours=1)).isoformat()},
             always_notify=False,
         )
         self.assertEqual(reason, "alert")
+
+    def test_hourly_limit_includes_new_incidents_escalations_recovery_and_daily(self):
+        cases = (
+            ("a:warning", "", False, "alert"),
+            ("a:warning|b:warning", "a:warning", False, "alert"),
+            ("a:critical", "a:warning", False, "alert"),
+            ("", "a:warning", False, "recovery"),
+            ("", "", True, "daily"),
+            ("a:critical", "a:warning", True, "daily"),
+        )
+        for signature, notified, daily, expected in cases:
+            for elapsed in (dt.timedelta(minutes=59, seconds=59), dt.timedelta(hours=1)):
+                with self.subTest(signature=signature, notified=notified, daily=daily, elapsed=elapsed):
+                    reason, _ = health.notification_decision(
+                        signature=signature, notified_signature=notified, level="critical", now=NOW + elapsed,
+                        previous_state={"last_notification_at": NOW.isoformat(), "recovery_since": NOW.isoformat()},
+                        always_notify=daily,
+                    )
+                    self.assertEqual(reason, expected if elapsed >= dt.timedelta(hours=1) else None)
+
+    def test_rate_limited_daily_check_preserves_recovery_timer(self):
+        reason, recovering = health.notification_decision(
+            signature="", notified_signature="a:warning", level="ok", now=NOW + dt.timedelta(minutes=56),
+            previous_state={"last_notification_at": NOW.isoformat(), "recovery_since": NOW.isoformat()},
+            always_notify=True,
+        )
+        self.assertIsNone(reason)
+        self.assertEqual(recovering, NOW.isoformat())
+
+    @mock.patch("monitor_pipeline_health.telegram_notify.send_message", return_value={"message_id": 123})
+    @mock.patch("monitor_pipeline_health.run_checks")
+    @mock.patch("monitor_pipeline_health.utc_now", return_value=NOW)
+    def test_rate_limited_incidents_remain_pending_and_are_combined_after_an_hour(self, clock, checks, send):
+        for baseline in ([], [health.CheckResult("a", "A", "warning", "A late", immediate=True)]):
+            with self.subTest(baseline=baseline), TemporaryDirectory() as directory:
+                send.reset_mock()
+                args = health.parse_args([
+                    "--operational", "--always-notify", "--state-path", f"{directory}/state.json",
+                    "--latest-path", f"{directory}/latest.json", "--history-path", f"{directory}/history.jsonl",
+                ])
+                clock.return_value = NOW
+                checks.return_value = baseline
+                health.run_monitor(args)
+                self.assertEqual(send.call_count, 1)
+                args.always_notify = False
+                checks.return_value = [
+                    health.CheckResult("a", "A", "critical", "A overdue", immediate=True),
+                    health.CheckResult("b", "B", "warning", "B late", immediate=True),
+                ]
+                for elapsed in (dt.timedelta(minutes=10), dt.timedelta(minutes=59, seconds=59)):
+                    clock.return_value = NOW + elapsed
+                    health.run_monitor(args)
+                    state = json.loads(args.state_path.read_text())
+                    self.assertEqual(send.call_count, 1)
+                    self.assertEqual(state["notified_signature"], health.problem_signature(baseline))
+                    self.assertEqual(state["problem_signature"], "a:critical|b:warning")
+                clock.return_value = NOW + dt.timedelta(hours=1)
+                health.run_monitor(args)
+                state = json.loads(args.state_path.read_text())
+                self.assertEqual(send.call_count, 2)
+                self.assertEqual(state["notified_signature"], "a:critical|b:warning")
+                self.assertIn("A overdue", state["notification_body"])
+                self.assertIn("B late", state["notification_body"])
 
     def test_historical_service_failure_is_daily_only(self):
         checks = [
