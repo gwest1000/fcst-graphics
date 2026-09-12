@@ -126,14 +126,34 @@ Targets reflect local processing schedules, not guarantees from the model provid
 - ECMWF ensemble: 07:00 Pacific for 00Z; 14:30 Pacific for 12Z.
 
 Alerts name the model, dated run, hours past the target, plain-English cause,
-and latest complete fallback. Publication requires every expected forecast hour
-and product; a partial upload does not count as recovery. A newer complete run
+and the affected products. When only part of a run is missing, alerts name the
+missing graphics and any missing-frame count, and list what is already available.
+A missing fire-danger product is not described as a missing weather forecast;
+recorded CWFIS failures are distinguished from other fire-danger calculation errors.
+Publication requires every expected forecast hour and product; a partial upload
+does not count as recovery. A newer complete run
 supersedes historical failed cycles. Each dated run has its own incident identity.
 All health notifications are limited to one per rolling hour, including new or
 escalating incidents, recovery messages, and daily summaries. Problems detected
 during that hour remain pending and are reported on the next eligible check if
 still present. The daily summary is skipped if another notification was sent
 within the preceding hour.
+
+CWFIS monitoring validates the actual BC-domain FFMC/DMC/DC GeoTIFF files, including
+georeferencing and plausible values, for one common observation date. Empty date
+directories, temporary downloads, corrupt files, and future-dated inputs do not
+count as usable data. An early warning begins at 36 hours after the observation's
+20Z reference time, leaving 12 hours before the shared 48-hour initialization limit;
+the warning gives the expiry time and states what will be affected. This allows
+for the usual evening download while warning before fire-danger guidance is lost.
+Inputs older than 48 hours are critical, rather than merely showing old date labels.
+The monitor also requests a tiny 16-by-16 GeoTIFF sample for each fuel-moisture field
+every ten minutes, using a known usable date. HTTP 200 responses containing XML
+errors do not count as success. Export-service failures persisting for 55 minutes
+trigger an early warning even when cached inputs remain fresh. These probes are
+read-only and never replace forecast input caches. All warnings retain the hourly
+notification limit.
+
 Model-run reminders repeat every 4 hours; other critical incidents repeat every
 6 hours and warnings every 24 hours. Successful automatic repairs and transient
 remote failures must persist for 55 minutes before alerting, and recovery must

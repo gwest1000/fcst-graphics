@@ -6,13 +6,16 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import fcntl
+import io
 import json
 import os
 import re
 import shutil
 import subprocess
 import time
+import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -20,6 +23,7 @@ from typing import Callable, Iterable, Iterator, Mapping
 from zoneinfo import ZoneInfo
 
 import telegram_notify
+from fire_danger_peak import MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS
 
 
 PUBLIC_BASE_URL = "https://pub-969ec1fc2e19465797efb65b276a58da.r2.dev"
@@ -40,6 +44,9 @@ MAX_REPORTED_PROBLEMS = 8
 RUN_DELAY_GRACE = dt.timedelta(hours=1)
 RUN_REMINDER = dt.timedelta(hours=4)
 MIN_NOTIFICATION_INTERVAL = dt.timedelta(hours=1)
+CWFIS_EARLY_WARNING_AGE = dt.timedelta(hours=36)
+CWFIS_FIELDS = ("ffmc", "dmc", "dc")
+CWFIS_WCS_URL = "https://cwfis.cfs.nrcan.gc.ca/geoserver/public/wcs"
 RADARSAT_HEALTH_PATH = Path(
     os.environ.get(
         "RADARSAT_HEALTH_STATUS_PATH",
@@ -115,6 +122,17 @@ RUN_SCHEDULES = (
     RunSchedule("ecmwf_ensemble", 0, "ECMWF ensemble", ("ecmwf_ensemble_spread_500",), LONG_HOURS, (7, 0)),
     RunSchedule("ecmwf_ensemble", 12, "ECMWF ensemble", ("ecmwf_ensemble_spread_500",), LONG_HOURS, (14, 30)),
 )
+
+PRODUCT_LABELS = {
+    "continental_fourpanel": "convective four-panel",
+    "continental_lightning_twopanel": "fire-weather RH/wind/lightning",
+    "continental_temperature": "temperature",
+    "continental_fwi2025_danger": "fire-danger",
+    "gefs_control_fourpanel": "synoptic four-panel",
+    "ecmwf_control_fourpanel": "synoptic four-panel",
+    "ecmwf_control_convective_fourpanel": "convective four-panel",
+    "ecmwf_ensemble_spread_500": "500-hPa ensemble spread",
+}
 
 
 REQUIRED_LAUNCH_AGENTS = (
@@ -418,17 +436,29 @@ def plain_run_cause(status: Mapping[str, object], interrupted: bool = False) -> 
 
 
 def run_is_published(run: Mapping[str, object], schedule: RunSchedule) -> bool:
+    return all(product_is_published(run, product, schedule.hours) for product in schedule.products)
+
+
+def product_is_published(run: Mapping[str, object], product: str, hours: tuple[int, ...]) -> bool:
     if not isinstance(run, dict):
         return False
     products = run.get("products") or {}
     if not isinstance(products, dict):
         return False
-    return all(
-        isinstance(products.get(key), dict)
-        and isinstance(products[key].get("hours"), list)
-        and set(schedule.hours).issubset(products[key]["hours"])
-        for key in schedule.products
+    return (
+        isinstance(products.get(product), dict)
+        and isinstance(products[product].get("hours"), list)
+        and set(hours).issubset(products[product]["hours"])
     )
+
+
+def fire_danger_failure_cause(status: Mapping[str, object]) -> str | None:
+    errors = str(status.get("optional_errors") or "").lower()
+    if "cwfis" in errors:
+        return "usable CWFIS fuel-moisture inputs could not be loaded"
+    if "fwi2025" in errors:
+        return "the fire-danger calculation failed"
+    return None
 
 
 def check_scheduled_run(
@@ -475,18 +505,40 @@ def check_scheduled_run(
     cause = plain_run_cause(status, interrupted)
     if stalled and not stopped:
         cause = "the processing job has stopped reporting progress"
-    if delay.total_seconds() > 0:
-        hours = round(delay.total_seconds() / 3600, 1)
-        duration = "1 hour" if hours == 1 else f"{hours:.1f} hours"
-        summary = f"{label} is {duration} late because {cause}."
+    hours = round(delay.total_seconds() / 3600, 1)
+    duration = "1 hour" if hours == 1 else f"{hours:.1f} hours"
+    available = [product for product in schedule.products if any(
+        str(run.get("stamp", "")) >= stamp and product_is_published(run, product, schedule.hours)
+        for run in manifest.get("runs", ()) if isinstance(run, dict)
+    )]
+    missing = [product for product in schedule.products if product not in available]
+    if not missing:
+        return CheckResult(key, label, "ok", "All expected products are available from this run or newer runs.")
+    if available:
+        missing_names = ", ".join(PRODUCT_LABELS[product] for product in missing)
+        if missing == ["continental_fwi2025_danger"]:
+            cause = fire_danger_failure_cause(status) or cause
+            summary = f"{label}: weather graphics are available; fire-danger graphics are {duration} late because {cause}."
+            if fire_danger_failure_cause(status):
+                summary += " Fire-danger shading may also be missing from the fire-weather maps."
+        else:
+            available_names = ", ".join(PRODUCT_LABELS[product] for product in available)
+            summary = f"{label}: {missing_names} graphics are {duration} late because {cause}. Available: {available_names}."
+        current = next((run for run in manifest.get("runs", ()) if isinstance(run, dict) and run.get("stamp") == stamp), {})
+        for product in missing:
+            product_data = (current.get("products") or {}).get(product) or {}
+            present_hours = set(product_data.get("hours") or ()) if isinstance(product_data, dict) else set()
+            missing_hours = set(schedule.hours) - present_hours
+            if present_hours and missing_hours:
+                summary += f" {PRODUCT_LABELS[product].capitalize()}: {len(missing_hours)} of {len(schedule.hours)} frames missing."
     else:
-        summary = f"{label} has stopped because {cause}." if stopped else f"{label} appears stuck because {cause}."
+        summary = f"{label} is {duration} late because {cause}."
     summary += f" Expected on the website by {deadline.astimezone(LOCAL_TZ):%b %d at %H:%M %Z}."
-    if published:
+    if published and not available:
         latest = max(published, key=lambda run: str(run.get("stamp", "")))
         fallback = dt.datetime.strptime(latest["stamp"], "%Y%m%dT%HZ")
         summary += f" The latest complete forecast available is {fallback:%b %d %HZ}."
-    else:
+    elif not available:
         summary += " No complete forecast from this model could be confirmed on the website."
     return CheckResult(key, label, "critical" if delay >= dt.timedelta(hours=4) else "warning", summary, immediate=True)
 
@@ -524,7 +576,7 @@ def check_lightning_archive(now: dt.datetime, data_root: Path) -> CheckResult:
         return CheckResult("feed.lightning_archive", "ECCC lightning archive", "critical", f"archive check failed: {exc}")
 
 
-def latest_dated_directory(path: Path) -> dt.date | None:
+def dated_directories(path: Path) -> set[dt.date]:
     dates = []
     if path.is_dir():
         for child in path.iterdir():
@@ -533,20 +585,127 @@ def latest_dated_directory(path: Path) -> dt.date | None:
                     dates.append(dt.datetime.strptime(child.name, "%Y%m%d").date())
                 except ValueError:
                     continue
-    return max(dates) if dates else None
+    return set(dates)
+
+
+def latest_usable_cwfis_anchor(now: dt.datetime, data_root: Path) -> dt.date | None:
+    cache = data_root / "cwfis_fwi"
+    dates = set.intersection(*(dated_directories(cache / field) for field in CWFIS_FIELDS))
+    if not dates:
+        return None
+
+    # Plotting modules resolve volume-backed paths at import time. A missing data
+    # volume must remain a reportable health failure, not crash this monitor.
+    from PIL import Image
+    from make_experimental_danger_class import cwfis_cache_path, validate_cwfis_geotiff
+    from make_hrdps_west_convective import MODEL_CONFIGS
+
+    extent = MODEL_CONFIGS["continental"].extent
+    for date in sorted(dates, reverse=True):
+        if cwfis_anchor_time(date) > now:
+            continue
+        try:
+            for field in CWFIS_FIELDS:
+                path = cwfis_cache_path(cache, field, date, extent)
+                with Image.open(path) as image:
+                    if image.format != "TIFF" or not (
+                        image.tag_v2.get(34264) or (image.tag_v2.get(33922) and image.tag_v2.get(33550))
+                    ):
+                        raise ValueError("Not a georeferenced TIFF")
+                validate_cwfis_geotiff(path, field, None)
+        except (OSError, RuntimeError, ValueError):
+            continue
+        return date
+    return None
+
+
+def cwfis_anchor_time(date: dt.date) -> dt.datetime:
+    # CWFIS daily fuel-moisture codes represent 20Z in Pacific BC.
+    return dt.datetime.combine(date, dt.time(20), dt.timezone.utc)
 
 
 def check_cwfis_anchors(now: dt.datetime, data_root: Path) -> CheckResult:
-    fields = ("ffmc", "dmc", "dc")
-    latest = {field: latest_dated_directory(data_root / "cwfis_fwi" / field) for field in fields}
-    if any(value is None for value in latest.values()):
-        missing = ", ".join(field.upper() for field, value in latest.items() if value is None)
-        return CheckResult("feed.cwfis_anchors", "CWFIS FWI anchors", "critical", f"missing {missing} archive")
-    oldest = min(value for value in latest.values() if value is not None)
-    age_days = (now.astimezone(LOCAL_TZ).date() - oldest).days
-    level = "critical" if age_days > 4 else "warning" if age_days > 2 else "ok"
-    dates = ", ".join(f"{field.upper()} {value:%Y-%m-%d}" for field, value in latest.items())
-    return CheckResult("feed.cwfis_anchors", "CWFIS FWI anchors", level, dates)
+    latest = latest_usable_cwfis_anchor(now, data_root)
+    if latest is None:
+        return CheckResult(
+            "feed.cwfis_anchors", "CWFIS fire-danger inputs", "critical",
+            "No complete usable CWFIS fuel-moisture dataset could be verified for BC. "
+            "New fire-danger guidance cannot be initialized; other HRDPS weather fields do not depend on these inputs.",
+        )
+    age = now - cwfis_anchor_time(latest)
+    expires = cwfis_anchor_time(latest) + dt.timedelta(hours=MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS)
+    summary = f"The latest usable CWFIS fuel-moisture inputs are from {latest:%b %d} ({age.total_seconds() / 3600:.1f} hours old)."
+    if now > expires:
+        level = "critical"
+        summary += " They are too old to initialize new fire-danger forecasts; other HRDPS weather fields are unaffected."
+    elif age >= CWFIS_EARLY_WARNING_AGE:
+        level = "warning"
+        summary += (
+            f" Early warning: no newer complete inputs have been downloaded. They reach the "
+            f"{MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS}-hour limit on {expires.astimezone(LOCAL_TZ):%b %d at %H:%M %Z} "
+            f"(in {(expires - now).total_seconds() / 3600:.1f} hours); later model runs will lose fire-danger guidance unless fresh inputs arrive."
+        )
+    else:
+        level = "ok"
+    return CheckResult("feed.cwfis_anchors", "CWFIS fire-danger inputs", level, summary, immediate=True)
+
+
+def fetch_cwfis_sample(field: str, date: dt.date) -> bytes:
+    params = urllib.parse.urlencode({
+        "service": "WCS", "version": "1.0.0", "request": "GetCoverage",
+        "coverage": f"public:{field}", "BBOX": "-125,49,-120,54",
+        "WIDTH": "16", "HEIGHT": "16", "CRS": "EPSG:4326",
+        "FORMAT": "geotiff", "time": date.isoformat(),
+    })
+    with urllib.request.urlopen(f"{CWFIS_WCS_URL}?{params}", timeout=20) as response:
+        return response.read(1_000_000)
+
+
+def validate_cwfis_sample(content: bytes) -> None:
+    from PIL import Image
+
+    try:
+        root = ET.fromstring(content)
+    except ET.ParseError:
+        pass
+    else:
+        detail = " ".join(" ".join(root.itertext()).split())
+        if "geotiff writer" in detail.lower():
+            raise ValueError("their map server cannot find its GeoTIFF export component")
+        raise ValueError("their map server returned an error instead of a data map")
+    try:
+        with Image.open(io.BytesIO(content)) as image:
+            if image.format != "TIFF":
+                raise ValueError("not a TIFF")
+            image.load()
+    except (OSError, ValueError) as exc:
+        raise ValueError("the download was not a readable GeoTIFF data map") from exc
+
+
+def check_cwfis_service(
+    now: dt.datetime, data_root: Path,
+    loader: Callable[[str, dt.date], bytes] = fetch_cwfis_sample,
+) -> CheckResult:
+    # A known usable date tests export availability, not today's normal release latency.
+    date = latest_usable_cwfis_anchor(now, data_root) or (now - dt.timedelta(days=1)).date()
+    failures: dict[str, str] = {}
+    for field in CWFIS_FIELDS:
+        try:
+            validate_cwfis_sample(loader(field, date))
+        except ValueError as exc:
+            failures[field] = str(exc)
+        except Exception:
+            failures[field] = "the download service could not be reached or rejected the request"
+    if failures:
+        fields = ", ".join(field.upper() for field in failures)
+        causes = "; ".join(dict.fromkeys(failures.values()))
+        return CheckResult(
+            "feed.cwfis_service", "CWFIS map-download service", "warning",
+            f"CWFIS fuel-moisture map downloads are failing for {fields} because {causes}. "
+            "Fresh fire-danger inputs cannot be retrieved. Existing usable inputs can support new runs only until their "
+            f"{MAX_CWFIS_ANCHOR_AGE_AT_INIT_HOURS}-hour limit.",
+        )
+    return CheckResult("feed.cwfis_service", "CWFIS map-download service", "ok", "All three fuel-moisture map exports are readable.")
 
 
 def configured_volume(data_root: Path) -> Path:
@@ -717,6 +876,7 @@ def run_checks(
     checks.append(check_fire_manifest(now, base_url, loader))
     checks.append(check_lightning_archive(now, data_root))
     checks.append(check_cwfis_anchors(now, data_root))
+    checks.append(check_cwfis_service(now, data_root))
     if include_services:
         for label in REQUIRED_LAUNCH_AGENTS:
             check = check_launch_agent(label, auto_repair)
@@ -846,8 +1006,8 @@ def operational_impact(check: CheckResult) -> str:
         return "Active-fire symbols may be outdated; the underlying model forecast fields are unaffected."
     if check.key == "feed.lightning_archive":
         return "Lightning verification and later LPI tuning may have a data gap; forecast LPI fields are unaffected."
-    if check.key == "feed.cwfis_anchors":
-        return "Experimental fire-danger guidance may be anchored to older FFMC, DMC, or DC values."
+    if check.key.startswith("feed.cwfis_"):
+        return "New fire-danger guidance will become unavailable once usable fuel-moisture inputs exceed the 48-hour limit."
     if check.key.startswith("service."):
         if "reloaded automatically" in check.summary:
             return "The schedule was restored automatically; no missing product has been confirmed."
@@ -872,8 +1032,8 @@ def recommended_action(check: CheckResult) -> str:
         return "Check the BCWS feed and the hourly fire-overlay log."
     if check.key == "feed.lightning_archive":
         return "Inspect the lightning retrieval log and archive status before the next verification cycle."
-    if check.key == "feed.cwfis_anchors":
-        return "Inspect the CWFIS retrieval log and confirm the latest FFMC, DMC, and DC archives."
+    if check.key.startswith("feed.cwfis_"):
+        return "Check CWFIS map downloads and the last complete usable fuel-moisture inputs."
     if check.key.startswith("service."):
         if "reloaded automatically" in check.summary:
             return "No immediate action; confirm that its next scheduled update completes."
@@ -943,13 +1103,13 @@ def report_body(checks: list[CheckResult], now: dt.datetime, daily: bool) -> str
             lines.append(f"Disk: {storage.summary}")
         return "\n".join(lines)
 
-    run_only = bool(problems) and all(check.key.startswith("run.") for check in problems)
-    lines = [] if run_only else [f"Status: {level}", f"Checked: {now.astimezone(LOCAL_TZ):%Y-%m-%d %H:%M %Z}"]
+    plain_forecast_report = bool(problems) and all(check.key.startswith(("run.", "feed.cwfis_")) for check in problems)
+    lines = [] if plain_forecast_report else [f"Status: {level}", f"Checked: {now.astimezone(LOCAL_TZ):%Y-%m-%d %H:%M %Z}"]
     if problems:
-        if not run_only:
+        if not plain_forecast_report:
             lines.append(f"Problems: {len(problems)}")
         for check in problems[:MAX_REPORTED_PROBLEMS]:
-            if check.key.startswith("run."):
+            if check.key.startswith(("run.", "feed.cwfis_")):
                 lines.append(check.summary)
                 continue
             lines.append(f"[{check.level.upper()}] {check.label}")

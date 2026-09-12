@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import io
 import json
 import shutil
 import subprocess
@@ -9,6 +10,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest import mock
 
+from PIL import Image
 import monitor_pipeline_health as health
 import telegram_notify
 
@@ -37,6 +39,17 @@ class PipelineHealthTests(unittest.TestCase):
             for product in schedule.products:
                 self.assertIn(product, publishing.PRODUCTS_BY_MODEL[schedule.model])
                 self.assertEqual(schedule.hours, tuple(publishing.PRODUCTS[product].hours))
+                self.assertIn(product, health.PRODUCT_LABELS)
+
+    def test_cwfis_probe_uses_the_operational_service_endpoint(self):
+        from make_hrdps_west_lightning import FWI_WCS_URL
+        self.assertEqual(health.CWFIS_WCS_URL, FWI_WCS_URL)
+
+    def test_missing_volume_does_not_crash_cwfis_monitoring(self):
+        with TemporaryDirectory() as directory:
+            check = health.check_cwfis_anchors(NOW, Path(directory) / "unmounted")
+            self.assertEqual(check.level, "critical")
+            self.assertIn("No complete usable", check.summary)
 
     def test_website_deadlines_respect_model_schedule_and_daylight_saving(self):
         init = dt.datetime(2026, 9, 11, 12, tzinfo=dt.timezone.utc)
@@ -163,11 +176,152 @@ class PipelineHealthTests(unittest.TestCase):
     @mock.patch("monitor_pipeline_health.check_storage", return_value=health.CheckResult("storage", "Storage", "ok", "ok"))
     @mock.patch("monitor_pipeline_health.check_lightning_archive", return_value=health.CheckResult("lightning", "Lightning", "ok", "ok"))
     @mock.patch("monitor_pipeline_health.check_cwfis_anchors", return_value=health.CheckResult("fwi", "FWI", "ok", "ok"))
+    @mock.patch("monitor_pipeline_health.check_cwfis_service", return_value=health.CheckResult("cwfis", "CWFIS", "ok", "ok"))
     def test_unreadable_manifest_does_not_create_speculative_run_delays(self, *_mocks):
         checks = health.run_checks(NOW, base_url="https://example.test", data_root=Path("/tmp"),
                                    include_services=False, loader=mock.Mock(side_effect=RuntimeError("offline")))
         self.assertEqual(sum(c.key.startswith("manifest.") and c.level == "critical" for c in checks), 4)
         self.assertFalse(any(c.key.startswith("run.") for c in checks))
+
+    def test_missing_fire_danger_does_not_claim_the_weather_forecast_is_missing(self):
+        run = self.published_run("20260817T12Z")
+        del run["products"]["continental_fwi2025_danger"]
+        check = self.scheduled_check(NOW, {
+            "stamp": run["stamp"], "status": "degraded",
+            "optional_errors": ["FWI2025 danger: cannot identify image file cwfis_ffmc_20260817.tif"],
+        }, [run, self.published_run("20260817T00Z")])
+        self.assertIn("weather graphics are available", check.summary)
+        self.assertIn("fire-danger graphics are 4.5 hours late", check.summary)
+        self.assertIn("CWFIS fuel-moisture inputs", check.summary)
+        self.assertNotIn("latest complete forecast", check.summary)
+        self.assertNotIn("run for Aug 17 is", check.summary)
+
+    def test_partial_product_alert_names_missing_frames_and_available_products(self):
+        run = self.published_run("20260817T12Z")
+        run["products"]["continental_fourpanel"]["hours"].remove(24)
+        check = self.scheduled_check(NOW, runs=[run])
+        self.assertIn("convective four-panel graphics are", check.summary)
+        self.assertIn("1 of 17 frames missing", check.summary)
+        self.assertIn("Available: fire-weather RH/wind/lightning, temperature, fire-danger", check.summary)
+
+    def test_unrelated_fwi_error_is_not_blame_assigned_to_cwfis(self):
+        run = self.published_run("20260817T12Z")
+        del run["products"]["continental_fwi2025_danger"]
+        check = self.scheduled_check(NOW, {
+            "stamp": run["stamp"], "status": "degraded", "optional_errors": ["fwi2025_danger: numerical failure"],
+        }, [run])
+        self.assertIn("fire-danger calculation failed", check.summary)
+        self.assertNotIn("CWFIS", check.summary)
+
+    def test_ecmwf_partial_publication_names_the_specific_panel_product(self):
+        schedule = next(s for s in health.RUN_SCHEDULES if s.model == "ecmwf_control" and s.cycle == 0)
+        run = self.published_run("20260817T00Z", schedule)
+        del run["products"]["ecmwf_control_convective_fourpanel"]
+        check = self.scheduled_check(NOW, runs=[run], schedule=schedule)
+        self.assertIn("convective four-panel graphics are", check.summary)
+        self.assertIn("Available: synoptic four-panel", check.summary)
+
+    def write_cwfis_anchor(self, root, date, fields=health.CWFIS_FIELDS, value=20.0):
+        from make_experimental_danger_class import cwfis_cache_path
+        from make_hrdps_west_convective import MODEL_CONFIGS
+        paths = []
+        for field in fields:
+            path = cwfis_cache_path(root / "cwfis_fwi", field, date, MODEL_CONFIGS["continental"].extent)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            Image.new("F", (2, 2), value).save(path, format="TIFF", tiffinfo={
+                33550: (5000.0, 5000.0, 0.0), 33922: (0.0, 0.0, 0.0, -1800000.0, 1400000.0, 0.0),
+            })
+            paths.append(path)
+        return paths
+
+    def test_cwfis_warning_starts_12_hours_before_the_input_age_limit(self):
+        date = dt.date(2026, 8, 16)
+        anchor = health.cwfis_anchor_time(date)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_cwfis_anchor(root, date)
+            for hours, expected in ((35.99, "ok"), (36, "warning"), (48, "warning"), (48.01, "critical")):
+                with self.subTest(hours=hours):
+                    now = anchor + dt.timedelta(hours=hours)
+                    check = health.check_cwfis_anchors(now, root)
+                    self.assertEqual(check.level, expected)
+                    effective, _ = health.apply_debounce([check], {}, now)
+                    self.assertEqual(effective[0].level, expected)
+                    if hours == 36:
+                        self.assertIn("Early warning", check.summary)
+                        self.assertIn("in 12.0 hours", check.summary)
+
+    def test_cwfis_requires_complete_same_date_files_not_empty_or_failed_downloads(self):
+        old = dt.date(2026, 8, 15)
+        new = dt.date(2026, 8, 17)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            self.write_cwfis_anchor(root, old)
+            paths = self.write_cwfis_anchor(root, new)
+            for invalid in (b"", b"<ServiceException>export failed</ServiceException>"):
+                paths[-1].write_bytes(invalid)
+                self.assertEqual(health.latest_usable_cwfis_anchor(NOW, root), old)
+            paths[-1].unlink()
+            paths[-1].with_suffix(".tif.123.tmp").write_bytes(b"partial")
+            self.assertEqual(health.latest_usable_cwfis_anchor(NOW, root), old)
+            self.write_cwfis_anchor(root, new, fields=("dc",), value=float("nan"))
+            self.assertEqual(health.latest_usable_cwfis_anchor(NOW, root), old)
+            self.write_cwfis_anchor(root, new)
+            self.assertEqual(health.latest_usable_cwfis_anchor(NOW, root), new)
+
+    def test_cwfis_rejects_wrong_domain_future_and_ungeoreferenced_images(self):
+        date = dt.date(2026, 8, 17)
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            paths = self.write_cwfis_anchor(root, date)
+            self.assertIsNone(health.latest_usable_cwfis_anchor(health.cwfis_anchor_time(date) - dt.timedelta(seconds=1), root))
+            paths[-1].rename(paths[-1].with_name("cwfis_dc_20260817_wrong_domain.tif"))
+            self.assertIsNone(health.latest_usable_cwfis_anchor(NOW, root))
+            Image.new("F", (2, 2), 20.0).save(paths[-1], format="TIFF")
+            self.assertIsNone(health.latest_usable_cwfis_anchor(NOW, root))
+            self.assertEqual(health.check_cwfis_anchors(NOW, root).level, "critical")
+
+    @mock.patch("monitor_pipeline_health.latest_usable_cwfis_anchor", return_value=dt.date(2026, 8, 16))
+    def test_cwfis_export_probe_detects_http_200_xml_and_is_debounced(self, _anchor):
+        error = b"<ServiceExceptionReport><ServiceException>Could not find the GeoTIFF writer, please check it&apos;s in the classpath</ServiceException></ServiceExceptionReport>"
+        loader = mock.Mock(return_value=error)
+        check = health.check_cwfis_service(NOW, Path("/unused"), loader)
+        self.assertEqual(loader.call_count, 3)
+        self.assertIn("FFMC, DMC, DC", check.summary)
+        self.assertIn("GeoTIFF export component", check.summary)
+        self.assertEqual(check.level, "warning")
+        first, pending = health.apply_debounce([check], {}, NOW)
+        self.assertEqual(first[0].level, "ok")
+        second, _ = health.apply_debounce([check], pending, NOW + dt.timedelta(hours=1))
+        self.assertEqual(second[0].level, "warning")
+
+    @mock.patch("monitor_pipeline_health.latest_usable_cwfis_anchor", return_value=dt.date(2026, 8, 16))
+    def test_cwfis_export_probe_accepts_tiffs_but_rejects_html_png_and_broken_downloads(self, _anchor):
+        content = io.BytesIO()
+        Image.new("F", (16, 16), 20.0).save(content, format="TIFF")
+        loader = mock.Mock(return_value=content.getvalue())
+        self.assertEqual(health.check_cwfis_service(NOW, Path("/unused"), loader).level, "ok")
+        loader.side_effect = [content.getvalue(), b"<html>Service unavailable</html>", OSError("offline")]
+        check = health.check_cwfis_service(NOW, Path("/unused"), loader)
+        self.assertIn("DMC, DC", check.summary)
+        self.assertNotIn("FFMC", check.summary)
+        self.assertIn("returned an error", check.summary)
+        png = io.BytesIO()
+        Image.new("L", (16, 16)).save(png, format="PNG")
+        for invalid in (b"bad download", content.getvalue()[:30], png.getvalue()):
+            with self.assertRaises(ValueError):
+                health.validate_cwfis_sample(invalid)
+
+    def test_cwfis_and_run_alerts_remain_plain_english_when_combined(self):
+        checks = [
+            health.CheckResult("run.continental.20260817T12Z", "HRDPS", "warning", "HRDPS weather graphics are available; fire-danger graphics are delayed."),
+            health.CheckResult("feed.cwfis_service", "CWFIS", "warning", "CWFIS map exports are failing."),
+        ]
+        body = health.report_body(checks, NOW, False)
+        self.assertIn("weather graphics are available", body)
+        self.assertIn("CWFIS map exports", body)
+        for jargon in ("Status:", "Issue:", "Impact:", "Action:"):
+            self.assertNotIn(jargon, body)
 
     def test_manual_invocation_is_isolated_from_operational_state(self):
         with mock.patch.dict("os.environ", {"TMPDIR": "/tmp"}):
