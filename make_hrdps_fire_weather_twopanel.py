@@ -231,7 +231,7 @@ def add_panel_label(ax: plt.Axes, title: str, footer: str, edge_bands: bool = Fa
                 zorder=76,
             )
         )
-        ax.text(
+        label = ax.text(
             0.5,
             EDGE_FOOTER_HEIGHT / 2.0,
             footer,
@@ -243,6 +243,11 @@ def add_panel_label(ax: plt.Axes, title: str, footer: str, edge_bands: bool = Fa
             color="black",
             zorder=77,
         )
+        renderer = ax.figure.canvas.get_renderer()
+        text_width = label.get_window_extent(renderer).width
+        available_width = ax.get_window_extent(renderer).width * 0.98
+        if text_width > available_width:
+            label.set_fontsize(EDGE_FOOTER_FONTSIZE * available_width / text_width)
         return
     if title:
         ax.text(
@@ -367,12 +372,11 @@ def edge_panel_footers(
     activity: fire_activity.FireActivity | None = None,
 ) -> tuple[str, str]:
     period = period_hazard_label(fhour)
-    lightning_period = period.replace(" max", "")
     fire_label = fire_activity_footer(activity)
     fire_suffix = f" | {fire_label}" if fire_label else ""
     return (
         f"RH <30/20% brown / >60/80% blue | {period} gust",
-        f"Fcst fire danger | {lightning_period} Ltg cntrd | Dry Ltg * | "
+        "Fcst fire danger | LPI FCST CNTRD | Dry Ltg * | "
         f"Rain:blue dots 2.5/10 mm{fire_suffix}",
     )
 

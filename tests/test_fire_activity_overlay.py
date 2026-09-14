@@ -43,6 +43,14 @@ class FireActivityOverlayTests(unittest.TestCase):
         self.assertGreater(alpha[:, :700].max(), 0)
         self.assertGreater(alpha[:, 740:].max(), 0)
 
+    def test_foreground_boxes_hide_icons_without_changing_neighbouring_map_pixels(self):
+        image = Image.new("RGBA", (100, 100), (255, 100, 0, 255))
+        overlay.mask_foreground_boxes(image, [(0.8, 0.2, 0.2, 0.5), (0, 0, 1, 0.03)])
+        self.assertEqual(image.getpixel((90, 50))[3], 0)  # Legend covers icon.
+        self.assertEqual(image.getpixel((50, 99))[3], 0)  # Footer covers icon.
+        self.assertEqual(image.getpixel((79, 50)), (255, 100, 0, 255))
+        self.assertEqual(image.getpixel((90, 20)), (255, 100, 0, 255))
+
     def test_manifest_describes_only_available_live_products(self):
         config = R2Config("account", "access", "secret", "bucket", "https://example.r2.dev")
         activity = self.sample_activity()

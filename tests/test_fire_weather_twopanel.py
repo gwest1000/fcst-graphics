@@ -175,7 +175,7 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         self.assertEqual(left, "RH <30/20% brown / >60/80% blue | 3-h max gust")
         self.assertEqual(
             right,
-            "Fcst fire danger | 3-h Ltg cntrd | Dry Ltg * | Rain:blue dots 2.5/10 mm",
+            "Fcst fire danger | LPI FCST CNTRD | Dry Ltg * | Rain:blue dots 2.5/10 mm",
         )
         self.assertNotIn("Transmission", left)
         self.assertNotIn("grey", right)

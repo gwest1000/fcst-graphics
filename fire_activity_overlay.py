@@ -16,6 +16,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+from PIL import Image, ImageDraw
 
 import fire_activity
 import make_hrdps_fire_weather_twopanel as firewx
@@ -91,6 +92,17 @@ def _transparent_axes(spec: OverlaySpec):
     return fig, tuple(axes)
 
 
+def mask_foreground_boxes(image: Image.Image, boxes: Iterable[tuple[float, float, float, float]]) -> None:
+    """Remove only icon pixels covered by opaque forecast boxes (figure coordinates)."""
+    import math
+
+    draw = ImageDraw.Draw(image)
+    for x, y, width, height in boxes:
+        draw.rectangle((math.floor(x * image.width), math.floor((1.0 - y - height) * image.height),
+                        math.ceil((x + width) * image.width), math.ceil((1.0 - y) * image.height)),
+                       fill=(0, 0, 0, 0))
+
+
 def render_overlay(
     spec: OverlaySpec,
     activity: fire_activity.FireActivity,
@@ -104,6 +116,18 @@ def render_overlay(
     try:
         for ax in axes:
             firewx.add_fire_activity(ax, activity)
+        # The web viewer flattens this PNG above the forecast raster. Reserve
+        # the foreground boxes here so live incidents stay behind their labels.
+        fig.canvas.draw()
+        foreground_boxes = [(0.0, 1.0 - firewx.EDGE_HEADER_HEIGHT, 1.0, firewx.EDGE_HEADER_HEIGHT)]
+        for index, ax in enumerate(axes):
+            pos = ax.get_position()
+            foreground_boxes.append((pos.x0, pos.y0, pos.width, pos.height * firewx.EDGE_FOOTER_HEIGHT))
+            layout = (firewx.BC_GUST_COLORBAR_LAYOUT if index == 0 else firewx.BC_DANGER_COLORBAR_LAYOUT) \
+                if spec.region_key == "bc" else firewx.regional_colorbar_layout(spec.region_key)
+            x, y, width, height = layout["backdrop"]
+            foreground_boxes.append((pos.x0 + x * pos.width, pos.y0 + y * pos.height,
+                                     width * pos.width, height * pos.height))
         fig.savefig(
             temporary_path,
             dpi=plot_style.PLOT_DPI,
@@ -113,6 +137,10 @@ def render_overlay(
         )
     finally:
         plt.close(fig)
+    with Image.open(temporary_path) as source:
+        image = source.convert("RGBA")
+    mask_foreground_boxes(image, foreground_boxes)
+    image.save(temporary_path)
     temporary_path.replace(output_path)
     return output_path
 
