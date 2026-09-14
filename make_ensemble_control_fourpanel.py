@@ -35,6 +35,7 @@ from make_hrdps_west_fourpanel import (
     HGT500_LABEL_FORMAT,
     HGT500_LEVELS_KM,
     PANEL_PROJ,
+    TEMP850_LABEL_FONTSIZE,
     add_watersheds,
     decimate,
     label_contours,
@@ -1116,8 +1117,8 @@ def plot_synoptic_core_panel(
             transform=DATA_CRS,
             zorder=23,
         )
-        label_contours(positive, fontsize=5.0, fmt="%d", colors="#d00000")
-        label_contours(negative, fontsize=5.0, fmt="%d", colors="#1658d3")
+        label_contours(positive, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%d", colors="#d00000")
+        label_contours(negative, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%d", colors="#1658d3")
         footer = "IPW(shaded,mm), LL WVel(cntrd every 5cm/s), IVT(unit vctrs coloured by magnitude)"
     plot_transport_vectors(
         ax,
@@ -1217,7 +1218,7 @@ def plot_convective_core_panel(
         transform=DATA_CRS,
         zorder=22,
     )
-    label_contours(li_contours, fontsize=5.8, fmt="%d", colors=li_colors)
+    label_contours(li_contours, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%d", colors=li_colors)
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(
         fig,
@@ -1292,7 +1293,7 @@ def plot_fourpanel(
         transform=DATA_CRS,
         zorder=22,
     )
-    label_contours(hgt_ct, fontsize=5.4, fmt=HGT500_LABEL_FORMAT)
+    label_contours(hgt_ct, fontsize=TEMP850_LABEL_FONTSIZE, fmt=HGT500_LABEL_FORMAT)
     plot_barbs(
         ax,
         u500.lon,
@@ -1399,9 +1400,9 @@ def plot_fourpanel(
         stride=contour_stride,
     )
     mslp_ct = ax.contour(clon, clat, cmslp, levels=np.arange(95.2, 104.8, 0.4), colors="#5f5f5f", linewidths=1.05, transform=DATA_CRS, zorder=22)
-    label_contours(mslp_ct, fontsize=5.6, fmt="%.1f")
+    label_contours(mslp_ct, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%.1f")
     major_mslp = ax.contour(clon, clat, cmslp, levels=np.arange(95.2, 104.8, 0.8), colors="#0046ff", linewidths=1.35, transform=DATA_CRS, zorder=23)
-    label_contours(major_mslp, fontsize=5.8, fmt="%.1f", colors="black")
+    label_contours(major_mslp, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%.1f", colors="black")
     plot_barbs(
         ax,
         u10.lon,
