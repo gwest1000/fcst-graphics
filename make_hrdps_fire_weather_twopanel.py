@@ -336,7 +336,7 @@ def add_figure_header(
 
 
 def period_hazard_label(fhour: int) -> str:
-    return "3-h max" if fhour > 0 else "Init-time"
+    return "3-h max"
 
 
 def fire_activity_footer(activity: fire_activity.FireActivity | None) -> str:
@@ -376,7 +376,7 @@ def edge_panel_footers(
     fire_suffix = f" | {fire_label}" if fire_label else ""
     return (
         f"RH <30/20% brown / >60/80% blue | {period} gust",
-        "Fcst fire danger | LPI FCST CNTRD | Dry Ltg * | "
+        "Fcst fire danger | LPI fcst cntrd | Dry Ltg * | "
         f"Rain:blue dots 2.5/10 mm{fire_suffix}",
     )
 

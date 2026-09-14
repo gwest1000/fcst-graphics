@@ -699,7 +699,7 @@ def plot_fourpanel(
                 path_effects.Normal(),
             ]
         )
-    label_contours(hgt_ct, fontsize=5.4, fmt=HGT500_LABEL_FORMAT)
+    label_contours(hgt_ct, fontsize=TEMP850_LABEL_FONTSIZE, fmt=HGT500_LABEL_FORMAT)
     plot_barbs(ax, plot_lon, plot_lat, u250, v250, barb_stride, color="black", row_density=2.0, column_density=2.0)
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[-4, 0, 4, 8, 12, 16, 20, 24], label="$10^{-5}$ s$^{-1}$", fmt="%g")
@@ -774,7 +774,7 @@ def plot_fourpanel(
         transform=DATA_CRS,
         zorder=22,
     )
-    label_contours(li_ct, fontsize=5.8, fmt="%d", colors=li_colors)
+    label_contours(li_ct, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%d", colors=li_colors)
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=np.arange(10, 52, 2), label="mm", fmt="%g")
     plot_style.add_fourpanel_text(ax, header, "IPW(shaded,mm), LI(cntrd 0/-2/-4/-6), CAPE(hatch 500/1000J/kg)", run)
@@ -866,7 +866,7 @@ def plot_fourpanel(
         transform=DATA_CRS,
         zorder=22,
     )
-    label_contours(minor_mslp, fontsize=5.6, fmt="%.1f")
+    label_contours(minor_mslp, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%.1f")
     major_mslp = ax.contour(
         clon,
         clat,
@@ -877,7 +877,7 @@ def plot_fourpanel(
         transform=DATA_CRS,
         zorder=23,
     )
-    label_contours(major_mslp, fontsize=5.8, fmt="%.1f", colors="black")
+    label_contours(major_mslp, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%.1f", colors="black")
     threshold_mslp = ax.contour(
         clon,
         clat,
@@ -888,7 +888,7 @@ def plot_fourpanel(
         transform=DATA_CRS,
         zorder=23,
     )
-    label_contours(threshold_mslp, fontsize=5.8, fmt="%.1f", colors=MSLP_BLUE)
+    label_contours(threshold_mslp, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%.1f", colors=MSLP_BLUE)
     high_mslp = ax.contour(
         clon,
         clat,
@@ -899,7 +899,7 @@ def plot_fourpanel(
         transform=DATA_CRS,
         zorder=23,
     )
-    label_contours(high_mslp, fontsize=5.8, fmt="%.1f", colors=MSLP_BLUE)
+    label_contours(high_mslp, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%.1f", colors=MSLP_BLUE)
     plot_barbs(ax, plot_lon, plot_lat, u10, v10, barb_stride, color="black", row_density=2.0, column_density=2.0)
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_precip_colorbar(fig, ax, cf, ticks=PRECIP_TICKS_MM, label="mm", fmt="%g")
