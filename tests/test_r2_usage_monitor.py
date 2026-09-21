@@ -164,6 +164,29 @@ class R2UsageMonitorTests(unittest.TestCase):
         notify_mock.assert_called_once()
         self.assertIn("R2 weekly report", notify_mock.call_args.args[0])
 
+class NotificationEvidenceTests(unittest.TestCase):
+    def test_mac_submission_is_not_delivery_confirmation(self):
+        from monitor_r2_usage import notify
+        from types import SimpleNamespace
+        with patch('monitor_r2_usage.telegram_notify.configured', return_value=False), patch('monitor_r2_usage.subprocess.run', return_value=SimpleNamespace(returncode=0)):
+            result = notify('billing warning')
+        self.assertTrue(result)
+        self.assertEqual(result.status, 'submitted_to_macos')
+        self.assertFalse(result.delivered)
+
+    def test_failed_submission_is_not_success(self):
+        from monitor_r2_usage import notify
+        from types import SimpleNamespace
+        with patch('monitor_r2_usage.telegram_notify.configured', return_value=False), patch('monitor_r2_usage.subprocess.run', return_value=SimpleNamespace(returncode=1)):
+            self.assertFalse(notify('billing warning'))
+
+    def test_telegram_acceptance_is_not_delivery_confirmation(self):
+        from monitor_r2_usage import notify
+        with patch('monitor_r2_usage.telegram_notify.configured', return_value=True), patch('monitor_r2_usage.telegram_notify.send_message'):
+            result = notify('billing warning')
+        self.assertEqual(result.status, 'accepted_by_telegram')
+        self.assertFalse(result.delivered)
+
 
 if __name__ == "__main__":
     unittest.main()

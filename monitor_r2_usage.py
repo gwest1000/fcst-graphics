@@ -356,10 +356,21 @@ def assess_usage(
     }
 
 
-def notify(message: str) -> bool:
+@dataclass(frozen=True)
+class NotificationResult:
+    channel: str
+    status: str
+    accepted: bool
+    delivered: bool = False  # Neither Telegram acceptance nor osascript confirms viewing.
+
+    def __bool__(self) -> bool:
+        return self.accepted
+
+
+def notify(message: str) -> NotificationResult:
     if telegram_notify.configured():
         telegram_notify.send_message("R2 Free-Tier Monitor", message)
-        return True
+        return NotificationResult("telegram", "accepted_by_telegram", True)
     escaped = message.replace("\\", "\\\\").replace('"', '\\"')
     result = subprocess.run(
         [
@@ -371,7 +382,7 @@ def notify(message: str) -> bool:
         capture_output=True,
         text=True,
     )
-    return result.returncode == 0
+    return NotificationResult("macos", "submitted_to_macos" if result.returncode == 0 else "failed", result.returncode == 0)
 
 
 def read_state(path: Path) -> dict[str, object]:
@@ -404,7 +415,7 @@ def should_notify(level: str, state: Mapping[str, object], now: dt.datetime) -> 
     if state.get("level") != level:
         return True
     try:
-        previous = dt.datetime.fromisoformat(str(state["last_notified_at"]).replace("Z", "+00:00"))
+        previous = dt.datetime.fromisoformat(str(state.get("last_notification_attempt_at") or state["last_notified_at"]).replace("Z", "+00:00"))
     except (KeyError, ValueError):
         return True
     return now - previous >= dt.timedelta(hours=24)
@@ -514,14 +525,30 @@ def main(argv: Iterable[str]) -> int:
             summary += f" Cycle operations: {operation_buckets}."
         print(summary, flush=True)
         notified = False
+        notification = state.get("notification", {"status": "not_configured_or_not_attempted", "delivered": False})
+        attempted = False
         if not args.no_notify and (
             args.always_notify or should_notify(str(assessment["level"]), state, now)
         ):
+            attempted = True
             notified = notify(summary)
+            notification = {
+                "channel": getattr(notified, "channel", "unknown"),
+                "status": getattr(notified, "status", "unknown"),
+                "accepted": bool(notified),
+                "delivered": False,
+                "attempted_at": payload["checked_at"],
+            }
+        payload["notification"] = notification
+        payload["billing_warning"] = summary if assessment["level"] != "ok" else None
+        write_json(args.latest_path, payload)
         new_state = {
             "level": assessment["level"],
+            "notification": notification,
+            "last_notification_attempt_at": payload["checked_at"] if attempted and notified else state.get("last_notification_attempt_at"),
             "consecutive_failures": 0,
             "last_checked_at": payload["checked_at"],
+            "last_notified_at_means": "submission accepted; delivery unconfirmed",
             "last_notified_at": (
                 payload["checked_at"] if notified else state.get("last_notified_at")
             ),
