@@ -180,7 +180,7 @@ GUST_VECTOR_EDGE_WIDTH = 0.22
 def fire_weather_footer(fhour: int, run: RunInfo | None = None) -> str:
     learned = run is not None and lpi_model.supported(model_config().key, run.cycle, fhour)
     period = "3-h max" if fhour > 0 else "Init-time"
-    lpi_text = "3-h lightning probability within 30km (%)" if learned else f"{period} LPI"
+    lpi_text = ("Init LPI diagnostic (0-100)" if fhour == 0 else "3-h lightning probability within 30km (%)") if learned else f"{period} LPI"
     return (
         f"{lpi_text}(shaded), {period} Gust(vectors), Peak Daily Fire Danger(cntr), "
         "valid-time 10m RH crosshatch(brown 20-30%, dark <20%; blue 60-80%, dark blue >80%), "
@@ -919,6 +919,21 @@ def gust_window_max(
     )
 
 
+_LPI_DOMAIN_MASKS = {}
+
+
+def learned_ingredients(snapshots, lat, lon):
+    import lightning_ml_archive as ml_archive
+    stride = max(1, int(round(5.0 / model_config().resolution_km)))
+    la, lo = lat[::stride, ::stride], lon[::stride, ::stride]
+    digest = lpi_model.grid_hash(la, lo)
+    if model_config().key == 'continental' and digest != lpi_model.load_model()['grid_hash']:
+        raise RuntimeError('LPI continental grid differs from training grid')
+    if digest not in _LPI_DOMAIN_MASKS:
+        _LPI_DOMAIN_MASKS[digest] = ml_archive.archive_domain_mask(la, lo)
+    return lpi_model.snapshot_inputs(snapshots, stride, _LPI_DOMAIN_MASKS[digest]), stride
+
+
 def compute_lightning_fields(
     run_dir: Path,
     run: RunInfo,
@@ -954,6 +969,12 @@ def compute_lightning_fields(
     snapshots = tuple(snapshots_list)
     current = snapshots[-1]
     if len(snapshots) == 1:
+        if lpi_model.supported(model_config().key, run.cycle, fhour):
+            a, stride = learned_ingredients(snapshots, lat[yslice, xslice], lon[yslice, xslice])
+            coarse, _ = lpi_model.infer(a, 'initial')
+            potential = lpi_model.native_grid(coarse, current.li.shape, stride)
+            return replace(current, potential=potential,
+                           dry_potential=lpi_model.dry_score(potential, snapshots, current.precip_3h, dry_lpi_gate))
         return current
 
     potential = finite_window_max(snapshot.potential for snapshot in snapshots)
@@ -975,14 +996,7 @@ def compute_lightning_fields(
     gust_kmh, u10_ms, v10_ms = gust_window_max(snapshots)
 
     if lpi_model.supported(model_config().key, run.cycle, fhour):
-        import lightning_ml_archive as ml_archive
-        stride = 2  # Fixed 5 km grid used in model development.
-        coarse_lat = lat[yslice, xslice][::stride, ::stride]
-        coarse_lon = lon[yslice, xslice][::stride, ::stride]
-        if lpi_model.grid_hash(coarse_lat, coarse_lon) != lpi_model.load_model()['grid_hash']:
-            raise RuntimeError('LPI model grid differs from its training grid; refusing silent transfer.')
-        domain = ml_archive.archive_domain_mask(coarse_lat, coarse_lon)
-        ingredients = lpi_model.snapshot_inputs(snapshots, stride, domain)
+        ingredients, stride = learned_ingredients(snapshots, lat[yslice, xslice], lon[yslice, xslice])
         coarse, _ = lpi_model.infer(ingredients, '3h')
         potential = lpi_model.native_grid(coarse, current.li.shape, stride)
         dry_potential = lpi_model.dry_score(potential, snapshots, current.precip_3h, dry_lpi_gate)
@@ -1187,7 +1201,7 @@ def save_lpi_cache(
             np.savez_compressed(
                 handle,
                 version=np.asarray([LPI_CACHE_VERSION], dtype=np.int16),
-                formula_version=np.asarray(lpi_model.VERSION + "_3h" if lpi_model.supported(model_config().key, run.cycle, fhour) else LPI_FORMULA_VERSION),
+                formula_version=np.asarray(lpi_model.VERSION + ("_initial" if fhour == 0 else "_3h") if lpi_model.supported(model_config().key, run.cycle, fhour) else LPI_FORMULA_VERSION),
                 model_key=np.asarray(model_config().key),
                 model_label=np.asarray(model_config().label),
                 source_label=np.asarray(model_config().source_label),
@@ -1195,7 +1209,7 @@ def save_lpi_cache(
                 init_iso=np.asarray(run.init_time.isoformat().replace("+00:00", "Z")),
                 fhour=np.asarray([int(fhour)], dtype=np.int16),
                 window_fhours=np.asarray(diagnostic_window_hours(fhour), dtype=np.int16),
-                temporal_aggregation=np.asarray("direct_block_probability" if lpi_model.supported(model_config().key, run.cycle, fhour) else "three_hour_max" if fhour > 0 else "initial_snapshot"),
+                temporal_aggregation=np.asarray(("initialization_proxy" if fhour == 0 else "direct_block_probability") if lpi_model.supported(model_config().key, run.cycle, fhour) else "three_hour_max" if fhour > 0 else "initial_snapshot"),
                 target_radius_km=np.asarray([30 if lpi_model.supported(model_config().key, run.cycle, fhour) else 0], dtype=np.int16),
                 model_sha256=np.asarray(hashlib.sha256(lpi_model.MODEL_PATH.read_bytes()).hexdigest() if lpi_model.supported(model_config().key, run.cycle, fhour) else ""),
                 lat=lat[sample].astype(np.float32, copy=False),
@@ -1208,13 +1222,18 @@ def save_lpi_cache(
     return cache_path
 
 
-def make_learned_daily_cache(cache_path, run, archive_root, lat, lon):
+def make_learned_daily_cache(cache_path, run, archive_root, lat, lon, end_hour=24, input_dir=None):
     """Assemble complete hourly files for the independent daily probability model."""
     import lightning_ml_archive as ml_archive
     root = archive_root or ml_archive.DEFAULT_ARCHIVE_ROOT
     arrays = []
     specs = {x.key: x for x in ml_archive.HOURLY_LPI_INGREDIENT_SPECS}
-    for hour in range(1, 25):
+    for hour in range(end_hour - 23, end_hour + 1):
+        retained = Path(input_dir) / f'f{hour:03d}.npz' if input_dir else None
+        if retained is not None and retained.exists():
+            with np.load(retained) as z:
+                arrays.append(z['inputs'])
+            continue
         src = ml_archive.hourly_lpi_hour_archive_path(root, run.stamp, hour)
         if not src.exists():
             log(f'Direct daily LPI pending: missing hourly file {src}')
@@ -1226,11 +1245,12 @@ def make_learned_daily_cache(cache_path, run, archive_root, lat, lon):
             if str(z['grid_hash'].item()) != lpi_model.load_model()['grid_hash']:
                 raise RuntimeError('Hourly grid differs from learned daily LPI training grid')
             arrays.append(np.stack([ml_archive.unpack_field(z[key], specs[key]) for key in lpi_model.KEYS]))
-    if lpi_model.grid_hash(lat[::2, ::2], lon[::2, ::2]) != lpi_model.load_model()['grid_hash']:
+    stride = max(1, int(round(5.0 / model_config().resolution_km)))
+    if model_config().key == 'continental' and lpi_model.grid_hash(lat[::stride, ::stride], lon[::stride, ::stride]) != lpi_model.load_model()['grid_hash']:
         raise RuntimeError('Daily LPI coordinates differ from training grid')
     potential, counts = lpi_model.infer(np.stack(arrays), '24h')
     path = Path(str(cache_path).replace('_lpi.npz', '_lpi24h.npz'))
-    lpi_model.write_cache(path, run, '24h', lat[::2, ::2], lon[::2, ::2], potential, counts)
+    lpi_model.write_cache(path, run, '24h', lat[::stride, ::stride], lon[::stride, ::stride], potential, counts, end_hour=end_hour, model_key=model_config().key)
     return path
 
 
@@ -1448,7 +1468,7 @@ def plot_lightning(
         ax,
         lpi_shaded,
         ticks=lpi_levels,
-        label="Lightning probability within 30km (%)" if lpi_model.supported(model_config().key, run.cycle, fhour) else "Lightning potential index",
+        label=("Initialization LPI diagnostic" if fhour == 0 else "Lightning probability within 30km (%)") if lpi_model.supported(model_config().key, run.cycle, fhour) else "Lightning potential index",
         title="LPI",
         fmt="%g",
         extend="max",
@@ -1623,6 +1643,16 @@ def make_region_plots(
                 )
 
             snapshot_callback = archive_snapshot
+    archive_callback = snapshot_callback
+    operational_input_dir = output_dir / run.stamp / 'lpi_cache' / 'ingredients'
+
+    def retain_snapshot(hour, snapshot):
+        if archive_callback is not None:
+            archive_callback(hour, snapshot)
+        inputs, _ = learned_ingredients((snapshot,), base_lat, base_lon)
+        lpi_model.save_inputs(operational_input_dir / f'f{hour:03d}.npz', inputs[0])
+
+    snapshot_callback = retain_snapshot
     terrain_path = (
         run_dir
         / f"{hrdps.TERRAIN_FHOUR:03d}"
@@ -1665,13 +1695,15 @@ def make_region_plots(
             shade_stride,
         )
         log(f"  cached LPI verification grid {cache_path}")
-        if model_config().key == 'continental' and run.cycle == '12' and fhour == 24:
-            daily_path = make_learned_daily_cache(
-                cache_path, run, hourly_archive_root, base_lat, base_lon)
+        if fhour in lpi_model.daily_end_hours(run.cycle):
+            daily_path = make_learned_daily_cache(cache_path, run, hourly_archive_root,
+                base_lat, base_lon, end_hour=fhour, input_dir=operational_input_dir)
             if daily_path is not None:
-                daily_plot = plot_dir / f"{model_output_prefix('lightning_daily')}_{run.stamp}_f024.png"
-                with np.load(daily_path) as daily_grid:
-                    lpi_model.plot_daily(daily_plot, run, daily_grid['lat'], daily_grid['lon'], daily_grid['potential'])
+                daily_plot = plot_dir / f"{model_output_prefix('lightning_daily')}_{run.stamp}_f{fhour:03d}.png"
+                with np.load(daily_path) as z:
+                    start_time = run.init_time + dt.timedelta(hours=fhour - 24)
+                    display_run = replace(run, init_time=start_time)
+                    lpi_model.plot_daily(daily_plot, display_run, z['lat'], z['lon'], z['potential'])
                 out_paths.append(daily_plot)
                 log(f"  direct daily LPI probability cache {daily_path}; map {daily_plot}")
         peak_danger_grid: fire_danger_peak.PeakDangerGrid | None = None
@@ -1786,6 +1818,15 @@ def make_region_plots(
                 peak_danger_grid,
                 watersheds,
             )
+            # Bind the displayed frame to its cache; backfilled verification caches
+            # alone must not relabel an older forecast image.
+            marker = cache_path.with_suffix('.display.json')
+            marker_tmp = marker.with_suffix(marker.suffix + f'.{os.getpid()}.tmp')
+            with np.load(cache_path) as cache:
+                frame_version = str(cache['formula_version'].item())
+            marker_tmp.write_text(json.dumps(dict(formula_version=frame_version,
+                png_sha256=hashlib.sha256(out_path.read_bytes()).hexdigest())))
+            marker_tmp.replace(marker)
             out_paths.append(out_path)
         if model_config().key == "west" and render_wind:
             from make_hrdps_wind import render_from_all_cause

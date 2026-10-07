@@ -69,6 +69,10 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
         )
         fields = mock.Mock()
         with TemporaryDirectory() as tmpdir:
+            np.savez(Path(tmpdir) / 'lpi.npz', formula_version='bc_lpi_v4_random32_initial')
+            def render_stub(path, *args):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b'rendered test frame')
             lightning.set_model("continental")
             try:
                 with (
@@ -78,7 +82,7 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
                     mock.patch.object(lightning, "compute_lightning_fields", return_value=fields),
                     mock.patch.object(lightning, "save_lpi_cache", return_value=Path(tmpdir) / "lpi.npz"),
                     mock.patch.object(lightning, "plot_lightning") as legacy_plot,
-                    mock.patch.object(twopanel, "plot_twopanel") as two_panel_plot,
+                    mock.patch.object(twopanel, "plot_twopanel", side_effect=render_stub) as two_panel_plot,
                 ):
                     paths = lightning.make_region_plots(
                         run,
@@ -91,6 +95,7 @@ class FireWeatherTwoPanelTests(unittest.TestCase):
                         no_fwi=True,
                         region_keys=("bc",),
                     )
+                self.assertTrue((Path(tmpdir) / 'lpi.display.json').exists())
             finally:
                 lightning.set_model("west")
 

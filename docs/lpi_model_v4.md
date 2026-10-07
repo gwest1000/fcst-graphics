@@ -2,9 +2,7 @@
 
 The implemented LPI is `bc_lpi_v4_random32`. It predicts the probability of at
 least one lightning occurrence within 30 km, expressed as 0-100 percent.
-Separate models predict the full day and each three-hour block. The current
-activation covers continental HRDPS 12Z runs at F003 through F024. F000,
-other cycles, day two and HRDPS-West are outside the evaluated deployment scope.
+Separate models predict the full day and each three-hour block. Activation covers all HRDPS cycles at F003 through F048. F000 uses the same learned responses as an initialization diagnostic, with its own label and temporal metadata. The active public product is continental HRDPS; the retired West rendering interface also applies the method when explicitly used. Day two, other cycles and West transfer the day-one continental coefficients and have not been independently confirmed.
 
 ## Repository and runtime
 
@@ -53,12 +51,13 @@ The three-hour maps use a direct block probability, not the maximum hourly
 index. Coarse probabilities are interpolated only for display on the native
 grid. The BC two-panel plot labels contours as probabilities and does not
 apply another spatial smoothing pass. Supported caches contain the formula
-version, target radius, time representation and model SHA-256.
+version, target radius, time representation and model SHA-256. Each generated
+continental Fire Weather frame also has a display provenance record tying its
+PNG hash to its formula version. This prevents a verification-cache backfill
+from relabelling an older forecast image in the public manifest.
 
-At F024 the worker reads all 24 retained hourly ingredient files, verifies their
-checksums and grid identity, writes `*_f024_lpi24h.npz`, and renders a
-`*_lightning_daily_*_f024.png` map. Daily verification consumes that direct
-cache. It never takes the maximum of three-hour probabilities. If hourly files
+The worker retains hourly inference inputs for the full 48-hour run in its plot cache. It assembles each complete 12Z-12Z daily window: F013-F036 for 00Z, F007-F030 for 06Z, F001-F024 and F025-F048 for 12Z, and F019-F042 for 18Z. It writes a matching `*_lpi24h.npz` cache and daily forecast map. Scientific archive inputs are available as a fallback, with their checksums and grid identity checked. Daily verification consumes that direct
+cache. It never takes the maximum of three-hour probabilities. Both complete windows of a 12Z run are verified as their observations become available, and pruning preserves both frames. The operational hourly input cache follows normal plot retention; the historical scientific archive remains separate. If hourly files
 are pending, the daily output is deferred; if the direct cache is absent,
 daily verification skips that product. Grid mismatches fail explicitly.
 The existing archive of hourly diagnostic ingredients retains its own version.

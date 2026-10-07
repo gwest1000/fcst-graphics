@@ -27,44 +27,36 @@
   "feature_sigma_km": 20,
   "target_radius_km": 30,
   "supported": {
-    "model": "continental",
-    "cycle": "12",
-    "forecast_hours": [
-      3,
-      6,
-      9,
-      12,
-      15,
-      18,
-      21,
-      24
+    "models": [
+      "continental",
+      "west"
     ],
-    "daily_hours": [
-      1,
-      2,
+    "cycles": [
+      "00",
+      "06",
+      "12",
+      "18"
+    ],
+    "forecast_hours": [
+      0,
       3,
-      4,
-      5,
       6,
-      7,
-      8,
       9,
-      10,
-      11,
       12,
-      13,
-      14,
       15,
-      16,
-      17,
       18,
-      19,
-      20,
       21,
-      22,
-      23,
-      24
-    ]
+      24,
+      27,
+      30,
+      33,
+      36,
+      39,
+      42,
+      45,
+      48
+    ],
+    "daily_windows": "Complete 12Z-to-12Z windows within F000-F048"
   },
   "architecture": {
     "hidden_units": 32,
@@ -1779,5 +1771,46 @@
       "training_rows": 1663484,
       "converged": true
     }
-  }
+  },
+  "calibration_scope": {
+    "model": "continental",
+    "cycle": "12",
+    "forecast_hours": [
+      3,
+      6,
+      9,
+      12,
+      15,
+      18,
+      21,
+      24
+    ],
+    "daily_hours": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24
+    ]
+  },
+  "extension_note": "Day two, other cycles and HRDPS-West apply frozen day-one coefficients; no independent verification claim. F000 is an initialization proxy, not a block probability."
 }

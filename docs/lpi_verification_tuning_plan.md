@@ -282,3 +282,29 @@ probability meaning and the dry-lightning heuristic. Preserved the humidity,
 rainfall and marker thresholds, applying the screening score to the new
 three-hour probability. Dry-lightning thresholds still require independent
 verification. See `docs/lpi_model_v4.md` and `docs/reference/`.
+
+### 7 October 2026: all-horizon live rollout
+
+Extended the frozen formulation to 00Z, 06Z, 12Z and 18Z HRDPS cycles at
+F003-F048. F000 is explicitly an initialization diagnostic. The active public
+continental Fire Weather run issued 7 October at 12Z was regenerated at all
+17 displayed horizons, installed into the operational archive and published.
+Daily verification for 6 October's 00Z, 06Z and 12Z runs was rebuilt using the
+new direct 24-hour probabilities and published after observations were complete.
+The public manifest identifies the new version. Remote F048 and verification
+PNG hashes matched the publisher's uploaded-file hashes; older forecast images
+retain their original description even when verification caches are backfilled.
+
+Future runs retain hourly inference inputs across the full 48 hours. Each full
+12Z-12Z daily window receives its own direct probability cache; 12Z runs have
+both F024 and F048 verification frames. Pruning preserves both. Day two and
+other cycles transfer the frozen day-one coefficients, so independent evidence
+for these extensions remains outstanding. The historical skill results have
+not been relabelled as tests of the extensions or final production refit.
+
+The quick reference keeps its contour, dry-lightning, rain, humidity and gust
+instructions. Its scope statement now covers all cycles through F048 and its
+reading section explains the F000 initialization exception. Existing diagnostic,
+verification, two-panel and publication checks passed, alongside feature and
+probability parity and direct day-two window checks. The revised report and PDF
+are served from the existing private Studio report URL.

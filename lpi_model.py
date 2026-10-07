@@ -15,7 +15,7 @@ SCALES=(.01,1.,.01,.05,.01,.001,.01,.01,.01,.01)
 FEATURES=('li_peak','cape_peak','charge_rh_peak','charge_depth_peak','mid_rh_peak','ascent_peak','rain_peak','li_mean','charge_mean','ascent_mean','unstable_fraction','ascent_fraction','instability_charge_peak','charged_ascent_peak','convective_rain_peak','cape_ascent_peak','dry_ascent_peak','humid_surface_peak','humid_subcloud_peak','li_ascent_peak')
 
 def supported(model_key,cycle,fhour):
- return model_key=='continental' and cycle=='12' and 0<int(fhour)<=24 and int(fhour)%3==0
+ return model_key in ('continental','west') and cycle in ('00','06','12','18') and 0<=int(fhour)<=48 and int(fhour)%3==0
 
 def ramp(a,lo,hi):return np.clip((a-lo)/(hi-lo),0,1)
 
@@ -46,7 +46,7 @@ def snapshot_inputs(snapshots,stride=2,domain_mask=None):
 def features(a):
  """20 temporal summaries, then Gaussian sigma20 km on the 5 km grid."""
  a=np.asarray(a,dtype=np.float32)
- if a.ndim!=4 or a.shape[1]!=10 or len(a) not in (3,24):raise ValueError('Expected 3 or 24 hourly arrays with ten ingredients')
+ if a.ndim!=4 or a.shape[1]!=10 or len(a) not in (1,3,24):raise ValueError('Expected 1, 3 or 24 hourly arrays with ten ingredients')
  valid=np.isfinite(a).all(1);count=valid.sum(0)
  z=[ramp(a[:,0],1.,-5.),ramp(a[:,1],75,800),ramp(a[:,2],45,80),ramp(a[:,3],35,150),ramp(a[:,4],35,75),ramp(a[:,5],.005,.05),np.maximum(ramp(a[:,6],.05,1.5),ramp(a[:,7],.02,.8)),np.clip(a[:,8]/100,0,1),np.clip(a[:,9]/100,0,1)]
  li,cape,rh,dep,mid,u,rain,surface,sub=[np.where(valid,x,np.nan) for x in z];charge=np.sqrt(rh*dep)
@@ -74,9 +74,9 @@ def probability(feature_grid,duration,model=None):
  return result.reshape(feature_grid.shape[1:])
 
 def infer(a,duration,model=None):
- expected=24 if duration=='24h' else 3
+ expected=24 if duration=='24h' else 1 if duration=='initial' else 3
  if len(a)!=expected:raise ValueError(f'{duration} requires exactly {expected} forecast hours')
- f,count=features(a);return probability(f,duration,model),count
+ f,count=features(a);return probability(f,'3h' if duration=='initial' else duration,model),count
 
 def native_grid(coarse,shape,stride=2):
  """Interpolate display only; retain missing support and exact sampled values."""
@@ -92,13 +92,13 @@ def dry_score(potential,snapshots,precip_3h,gate=20.):
  score=np.where(potential>=gate,potential*dry,0)*(1-ramp(precip_3h,.25,2.5))
  return np.where(valid&np.isfinite(potential)&np.isfinite(precip_3h),np.clip(score,0,100),np.nan).astype(np.float32)
 
-def write_cache(path,run,duration,lat,lon,potential,hour_counts):
+def write_cache(path,run,duration,lat,lon,potential,hour_counts,end_hour=24,model_key='continental'):
  """Atomic, self-describing probability cache; duration is never implicit."""
  path=Path(path);path.parent.mkdir(parents=True,exist_ok=True);tmp=path.with_suffix(f'.{os.getpid()}.tmp')
- fhour=24 if duration=='24h' else None
- if fhour is None:raise ValueError('This cache writer is for complete day-one products')
+ fhour=end_hour if duration=='24h' else None
+ if fhour is None:raise ValueError('This cache writer is for complete daily products')
  try:
-  with tmp.open('wb') as f:np.savez_compressed(f,version=np.asarray([4],np.int16),formula_version=np.asarray(VERSION+'_'+duration),model_key=np.asarray('continental'),model_label=np.asarray('HRDPS 2.5 km'),source_label=np.asarray('ECCC HRDPS'),run_stamp=np.asarray(run.stamp),init_iso=np.asarray(run.init_time.isoformat()),fhour=np.asarray([24],np.int16),window_fhours=np.arange(1,25,dtype=np.int16),temporal_aggregation=np.asarray('direct_daily_probability'),target_radius_km=np.asarray([30],np.int16),probability_scale=np.asarray('percent'),feature_smoothing_sigma_km=np.asarray([20],np.float32),model_sha256=np.asarray(hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()),lat=lat,lon=lon,potential=potential,valid_ingredient_hours=hour_counts)
+  with tmp.open('wb') as f:np.savez_compressed(f,version=np.asarray([4],np.int16),formula_version=np.asarray(VERSION+'_'+duration),model_key=np.asarray(model_key),model_label=np.asarray('HRDPS 2.5 km' if model_key=='continental' else 'HRDPS-West 1 km'),source_label=np.asarray('ECCC HRDPS'),run_stamp=np.asarray(run.stamp),init_iso=np.asarray(run.init_time.isoformat()),fhour=np.asarray([end_hour],np.int16),window_fhours=np.arange(end_hour-23,end_hour+1,dtype=np.int16),temporal_aggregation=np.asarray('direct_daily_probability'),target_radius_km=np.asarray([30],np.int16),probability_scale=np.asarray('percent'),feature_smoothing_sigma_km=np.asarray([20],np.float32),model_sha256=np.asarray(hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()),lat=lat,lon=lon,potential=potential,valid_ingredient_hours=hour_counts)
   tmp.replace(path)
  finally:tmp.unlink(missing_ok=True)
 
@@ -114,3 +114,21 @@ def plot_daily(path,run,lat,lon,p):
  hrdps.set_model('continental');lightning.set_model('continental');fig=plt.figure(figsize=(10,10));ax=fig.add_subplot(111,projection=lightning.PLOT_CRS);ax.set_extent((-138.2,-114.,48.,60.),crs=lightning.DATA_CRS);hrdps.add_map_features(ax)
  levels=[0,5,10,20,30,40,60,80,100];cs=ax.contourf(lon,lat,np.ma.masked_invalid(p),levels=levels,cmap='Purples',transform=lightning.DATA_CRS,transform_first=True);fig.colorbar(cs,ax=ax,shrink=.65,label='24-h probability of lightning within 30 km (%)');ax.set_title(f'BC LPI | 24-hour lightning probability\n{init:%d %b %Y %H}Z to {(init+dt.timedelta(days=1)):%d %b %Y %H}Z');fig.text(.08,.045,'Missing support is blank. 12Z continental HRDPS, day one. Gaussian feature sigma 20 km.',fontsize=9);png=Path(path);fig.savefig(png,dpi=150,bbox_inches='tight');plt.close(fig)
  return png
+
+
+def daily_end_hours(cycle):
+    """Complete 12Z-12Z windows inside the issued 48-hour forecast."""
+    offset = (12 - int(cycle)) % 24
+    return tuple(range(offset + 24, 49, 24))
+
+
+def save_inputs(path, inputs):
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(f'.{os.getpid()}.tmp')
+    try:
+        with tmp.open('wb') as f:
+            np.savez_compressed(f, inputs=inputs.astype(np.float32), model_sha256=np.asarray(hashlib.sha256(MODEL_PATH.read_bytes()).hexdigest()))
+        tmp.replace(path)
+    finally:
+        tmp.unlink(missing_ok=True)

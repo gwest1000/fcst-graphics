@@ -37,7 +37,7 @@ MIN_MANIFEST_FRAME_FRACTION = 0.60
 PNGQUANT_QUALITY = "70-90"
 FIRE_WEATHER_TWO_PANEL_DESCRIPTION = (
     "Two-panel fire weather: valid-time categorical 10 m RH and three-hour maximum colored all-cause gust vectors "
-    "on the left; experimental peak-daily BC fire-danger categories, three-hour maximum LPI contours and "
+    "on the left; experimental peak-daily BC fire-danger categories, learned three-hour lightning-probability contours (within 30 km; 20/40/60/80%) and "
     "dry-lightning asterisks, "
     "and 3-hour precipitation dots at 2.5 and 10 mm on the right."
 )
@@ -119,7 +119,7 @@ PRODUCTS: dict[str, ProductConfig] = {
         plot_type="LPI Verification",
         area="BC",
         model="HRDPS 2.5 km",
-        description="First 12Z-12Z LPI forecast-period maximum shading with observed 24-hour ECCC lightning-density categories overlaid.",
+        description="Direct learned 24-hour lightning probability within 30 km for complete 12Z-12Z windows, including day two where available, with observed ECCC lightning-density contours. F000 fire-weather LPI is an initialization diagnostic.",
         hours=LIGHTNING_FORECAST_HOURS,
         archive_subdir="continental/lightning_verif",
         model_key="continental",

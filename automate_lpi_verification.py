@@ -540,6 +540,19 @@ def first_full_12z_window(run: hrdps.RunInfo) -> DailyLpiWindow | None:
     return DailyLpiWindow(run=run, start=start, end=end, included_hours=tuple(included), end_fhour=included[-1])
 
 
+def full_12z_windows(run):
+    first = first_full_12z_window(run)
+    if first is None:
+        return ()
+    result = [first]
+    second_hours = tuple(h + 24 for h in first.included_hours)
+    if all(h in lightning.FORECAST_HOURS for h in second_hours):
+        result.append(DailyLpiWindow(run=run, start=first.start + dt.timedelta(days=1),
+            end=first.end + dt.timedelta(days=1), included_hours=second_hours,
+            end_fhour=second_hours[-1]))
+    return tuple(result)
+
+
 def aggregate_daily_lpi(paths_by_hour: dict[int, Path], window: DailyLpiWindow) -> DailyLpiForecast | None:
     missing = [fhour for fhour in window.included_hours if fhour not in paths_by_hour]
     if missing:
@@ -547,6 +560,9 @@ def aggregate_daily_lpi(paths_by_hour: dict[int, Path], window: DailyLpiWindow) 
 
     caches = [load_lpi_cache(paths_by_hour[fhour]) for fhour in window.included_hours]
     first = caches[0]
+    if any(c.formula_version != first.formula_version for c in caches):
+        log(f'Skipping mixed LPI model versions in {window.run.stamp}')
+        return None
     if first.formula_version == lightning.lpi_model.VERSION + '_3h':
         # Daily probabilities are directly fitted; maxima of block probabilities
         # have a different meaning and must never be substituted here.
@@ -555,7 +571,7 @@ def aggregate_daily_lpi(paths_by_hour: dict[int, Path], window: DailyLpiWindow) 
             log(f'Skipping learned daily verification: missing direct daily cache {daily_path}')
             return None
         direct = load_lpi_cache(daily_path)
-        if direct.formula_version != lightning.lpi_model.VERSION + '_24h' or direct.run.stamp != window.run.stamp:
+        if direct.formula_version != lightning.lpi_model.VERSION + '_24h' or direct.run.stamp != window.run.stamp or direct.fhour != window.end_fhour:
             raise RuntimeError('Incompatible direct daily LPI cache')
         return DailyLpiForecast(formula_version=direct.formula_version, model_key=direct.model_key,
             model_label=direct.model_label, source_label=direct.source_label, run=window.run,
@@ -610,7 +626,7 @@ def prune_stale_verification_frames(output_dir: Path, stamp: str, prefix: str, k
     if not run_dir.exists():
         return
     for path in run_dir.glob(f"{prefix}_{stamp}_f*.png"):
-        if path != keep_path:
+        if path != keep_path and path.name not in expected_verification_names('continental', stamp):
             path.unlink()
 
 
@@ -620,6 +636,12 @@ def expected_verification_name(model_key: str, stamp: str) -> str | None:
     if window is None:
         return None
     return f"{output_prefix_for_model(model_key)}_{stamp}_f{window.end_fhour:03d}.png"
+
+
+def expected_verification_names(model_key, stamp):
+    run = hrdps.RunInfo(cycle=stamp[-3:-1], stamp=stamp, init_time=hrdps.parse_stamp(stamp))
+    return {f'{output_prefix_for_model(model_key)}_{stamp}_f{w.end_fhour:03d}.png'
+            for w in full_12z_windows(run)}
 
 
 def prune_superseded_local_frames(args: argparse.Namespace) -> list[Path]:
@@ -639,7 +661,7 @@ def prune_superseded_local_frames(args: argparse.Namespace) -> list[Path]:
             if expected_name is None:
                 continue
             for path in run_dir.glob(f"{prefix}_{run_dir.name}_f*.png"):
-                if path.name != expected_name:
+                if path.name not in expected_verification_names(model_key, run_dir.name):
                     log(f"Removing superseded 3-hour verification frame: {path}")
                     path.unlink()
                     removed.append(path)
@@ -671,7 +693,7 @@ def prune_superseded_pages_frames(args: argparse.Namespace) -> list[Path]:
             archive_dir = pages_verification_dir(args.pages_repo, model_key, run_dir.name)
             prefix = output_prefix_for_model(model_key)
             for path in archive_dir.glob(f"{prefix}_{run_dir.name}_f*.png"):
-                if path.name != expected_name:
+                if path.name not in expected_verification_names(model_key, run_dir.name):
                     log(f"Removing superseded published verification frame: {path}")
                     path.unlink()
                     removed.append(path)
@@ -768,52 +790,49 @@ def render_ready_verifications(args: argparse.Namespace) -> list[Path]:
         if model_key != "continental":
             continue
         run = hrdps.RunInfo(cycle=stamp[-3:-1], stamp=stamp, init_time=hrdps.parse_stamp(stamp))
-        window = first_full_12z_window(run)
-        if window is None:
-            continue
+        for window in full_12z_windows(run):
+            forecast = aggregate_daily_lpi(paths_by_hour, window)
+            if forecast is None:
+                continue
 
-        forecast = aggregate_daily_lpi(paths_by_hour, window)
-        if forecast is None:
-            continue
+            out_path = verification_output_path(args, forecast)
+            if out_path.exists() and not args.force:
+                continue
 
-        out_path = verification_output_path(args, forecast)
-        if out_path.exists() and not args.force:
-            continue
+            hrdps.set_model(forecast.model_key)
+            obs = read_obs_window(
+                args.obs_dir,
+                forecast.start,
+                forecast.end,
+                hrdps.model_config().extent,
+                archive_root=args.ml_archive_root,
+            )
+            if obs is None:
+                continue
 
-        hrdps.set_model(forecast.model_key)
-        obs = read_obs_window(
-            args.obs_dir,
-            forecast.start,
-            forecast.end,
-            hrdps.model_config().extent,
-            archive_root=args.ml_archive_root,
-        )
-        if obs is None:
-            continue
-
-        if forecast.model_key not in watershed_cache:
-            watershed_cache[forecast.model_key] = hrdps.load_watersheds(hrdps.WATERSHED_CACHE)
-        if forecast.model_key not in transmission_cache:
-            transmission_cache[forecast.model_key] = lightning.load_transmission_lines()
-        log(
-            f"Rendering 12Z-12Z LPI verification {forecast.model_label} {forecast.run.stamp} "
-            f"F{forecast.end_fhour:03d} using {','.join(f'F{hour:03d}' for hour in window.included_hours)}."
-        )
-        prune_stale_verification_frames(
-            output_dir_for_model(args, forecast.model_key),
-            forecast.run.stamp,
-            output_prefix_for_model(forecast.model_key),
-            out_path,
-        )
-        render_verification(
-            forecast,
-            obs,
-            out_path,
-            watershed_cache[forecast.model_key],
-            transmission_cache[forecast.model_key],
-        )
-        log(f"  wrote {out_path}")
-        generated.append(out_path)
+            if forecast.model_key not in watershed_cache:
+                watershed_cache[forecast.model_key] = hrdps.load_watersheds(hrdps.WATERSHED_CACHE)
+            if forecast.model_key not in transmission_cache:
+                transmission_cache[forecast.model_key] = lightning.load_transmission_lines()
+            log(
+                f"Rendering 12Z-12Z LPI verification {forecast.model_label} {forecast.run.stamp} "
+                f"F{forecast.end_fhour:03d} using {','.join(f'F{hour:03d}' for hour in window.included_hours)}."
+            )
+            prune_stale_verification_frames(
+                output_dir_for_model(args, forecast.model_key),
+                forecast.run.stamp,
+                output_prefix_for_model(forecast.model_key),
+                out_path,
+            )
+            render_verification(
+                forecast,
+                obs,
+                out_path,
+                watershed_cache[forecast.model_key],
+                transmission_cache[forecast.model_key],
+            )
+            log(f"  wrote {out_path}")
+            generated.append(out_path)
     return generated
 
 
@@ -825,36 +844,34 @@ def verification_queue_summary(args: argparse.Namespace) -> dict[str, object]:
     ready_to_render = 0
     for (model_key, stamp), paths_by_hour in find_lpi_cache_groups(args).items():
         run = hrdps.RunInfo(cycle=stamp[-3:-1], stamp=stamp, init_time=hrdps.parse_stamp(stamp))
-        window = first_full_12z_window(run)
-        if window is None:
-            continue
-        candidate_windows += 1
-        missing_cache = set(window.included_hours) - set(paths_by_hour)
-        if missing_cache:
-            waiting_for_cache += 1
-            continue
-        expected_name = expected_verification_name(model_key, stamp)
-        output_path = output_dir_for_model(args, model_key) / stamp / str(expected_name)
-        if output_path.exists():
-            completed_windows += 1
-            continue
-        raw_obs_complete = all(
-            obs_path_for_time(args.obs_dir, timestamp).exists()
-            for timestamp in expected_obs_times(window.start, window.end)
-        )
-        aggregate_obs_complete = all(
-            path.exists()
-            for path in ml_archive.expected_observation_aggregate_paths(
-                args.ml_archive_root,
-                window.start,
-                window.end,
+        for window in full_12z_windows(run):
+            candidate_windows += 1
+            missing_cache = set(window.included_hours) - set(paths_by_hour)
+            if missing_cache:
+                waiting_for_cache += 1
+                continue
+            expected_name = f'{output_prefix_for_model(model_key)}_{stamp}_f{window.end_fhour:03d}.png'
+            output_path = output_dir_for_model(args, model_key) / stamp / str(expected_name)
+            if output_path.exists():
+                completed_windows += 1
+                continue
+            raw_obs_complete = all(
+                obs_path_for_time(args.obs_dir, timestamp).exists()
+                for timestamp in expected_obs_times(window.start, window.end)
             )
-        )
-        obs_complete = raw_obs_complete or aggregate_obs_complete
-        if obs_complete:
-            ready_to_render += 1
-        else:
-            waiting_for_observations += 1
+            aggregate_obs_complete = all(
+                path.exists()
+                for path in ml_archive.expected_observation_aggregate_paths(
+                    args.ml_archive_root,
+                    window.start,
+                    window.end,
+                )
+            )
+            obs_complete = raw_obs_complete or aggregate_obs_complete
+            if obs_complete:
+                ready_to_render += 1
+            else:
+                waiting_for_observations += 1
 
     latest_obs: dt.datetime | None = None
     if args.obs_dir.exists():

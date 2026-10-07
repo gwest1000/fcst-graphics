@@ -44,6 +44,20 @@ class R2PublishTests(unittest.TestCase):
         self.assertIn("/forecast/", forecast)
         self.assertIn("/verification/", verification)
 
+    def test_verification_backfill_does_not_relabel_old_forecast_png(self):
+        import json, hashlib, numpy as np
+        from r2_publish import lpi_publication_metadata
+        with tempfile.TemporaryDirectory() as tmp, mock.patch('r2_publish.source_root', return_value=Path(tmp)):
+            stamp='20261007T12Z';folder=Path(tmp)/stamp;cache=folder/'lpi_cache';cache.mkdir(parents=True)
+            path=cache/f'hrdps_continental_lightning_{stamp}_f003_lpi.npz'
+            np.savez(path,formula_version='bc_lpi_v4_random32_3h')
+            png=folder/f'hrdps_continental_lightning_twopanel_{stamp}_f003.png';png.write_bytes(b'old frame')
+            self.assertEqual(lpi_publication_metadata('continental_lightning_twopanel',stamp,[3])['lpiVersion'],'mixed_or_legacy')
+            path.with_suffix('.display.json').write_text(json.dumps(dict(formula_version='bc_lpi_v4_random32_3h',png_sha256=hashlib.sha256(png.read_bytes()).hexdigest())))
+            self.assertEqual(lpi_publication_metadata('continental_lightning_twopanel',stamp,[3])['lpiVersion'],'bc_lpi_v4_random32')
+            png.write_bytes(b'replaced frame')
+            self.assertEqual(lpi_publication_metadata('continental_lightning_twopanel',stamp,[3])['lpiVersion'],'mixed_or_legacy')
+
     def test_empty_manifest_is_valid(self):
         manifest = build_manifest(
             "continental",

@@ -534,6 +534,45 @@ def asset_version(stamp: str, product_key: str, rows: Iterable[sqlite3.Row]) -> 
     return f"{stamp}-{product_key}-{digest.hexdigest()}"
 
 
+def lpi_publication_metadata(product_key, stamp, hours):
+    """Describe each run's actual LPI, rather than relabel historical frames."""
+    if product_key not in ('continental_lightning_twopanel', 'continental_lightning_verif'):
+        return {}
+    import numpy as np
+    import lpi_model
+    root = source_root('continental_lightning_twopanel') / stamp / 'lpi_cache'
+    suffix = 'lpi24h' if product_key.endswith('_verif') else 'lpi'
+    versions = set()
+    for hour in hours:
+        path = root / f'hrdps_continental_lightning_{stamp}_f{hour:03d}_{suffix}.npz'
+        if not path.exists():
+            versions.add('legacy_or_unknown')
+            continue
+        try:
+            with np.load(path) as z:
+                version = str(z['formula_version'].item())
+            if product_key.endswith('_twopanel'):
+                marker = path.with_suffix('.display.json')
+                png = source_root(product_key) / stamp / f'hrdps_continental_lightning_twopanel_{stamp}_f{hour:03d}.png'
+                evidence = json.loads(marker.read_text()) if marker.exists() else {}
+                if evidence.get('formula_version') != version or evidence.get('png_sha256') != hashlib.sha256(png.read_bytes()).hexdigest():
+                    version = 'legacy_or_unknown'
+            versions.add(version)
+        except (OSError, ValueError, KeyError):
+            versions.add('legacy_or_unknown')
+    learned = bool(versions) and all(v.startswith(lpi_model.VERSION) for v in versions)
+    if learned:
+        return dict(lpiVersion=lpi_model.VERSION, lpiTargetRadiusKm=30,
+                    lpiCalibrationScope='12Z continental HRDPS day one; coefficients transferred to other cycles/day two',
+                    description=PRODUCTS[product_key].description)
+    description = ('Three-hour maximum ingredient LPI contours with dry-lightning asterisks and rainfall context.'
+        if product_key.endswith('_twopanel') else
+        '12Z-12Z ingredient LPI maximum with observed ECCC lightning density.')
+    if any(v.startswith(lpi_model.VERSION) for v in versions):
+        description = 'Mixed LPI rollout: consult individual frame labels for probability versus ingredient index.'
+    return dict(lpiVersion='mixed_or_legacy', description=description)
+
+
 def build_manifest(
     model: str,
     rows: Iterable[sqlite3.Row],
@@ -571,6 +610,7 @@ def build_manifest(
             "assetVersion": asset_version(stamp, product_key, product_rows),
             "validStart": init.isoformat().replace("+00:00", "Z"),
         }
+        product_record.update(lpi_publication_metadata(product_key, stamp, product_record['hours']))
         run = runs.setdefault(
             stamp,
             {

@@ -838,7 +838,7 @@ def plot_twopanel(
             + (f" | {fire_suffix}" if fire_suffix else "")
         )
     if lightning.lpi_model.supported(hrdps.model_config().key, run.cycle, fhour):
-        right_footer = 'Fire danger | 3-h LPI probability: 20/40/60/80% within30km | Dry * | Rain dots 2.5/10mm'
+        right_footer = ('Fire danger | Init LPI diagnostic 20/40/60/80 | Dry * | Rain dots' if fhour == 0 else 'Fire danger | 3-h LPI probability: 20/40/60/80% within30km | Dry * | Rain dots 2.5/10mm')
     add_panel_label(
         rh_ax,
         "",
@@ -930,7 +930,8 @@ def plot_regional_twopanel(
             fields.precip_3h,
             area_multiplier=REGIONAL_PRECIP_DOT_AREA_MULTIPLIER,
         )
-        plot_lpi_contours(danger_ax, plot_lon, plot_lat, fields.potential)
+        plot_lpi_contours(danger_ax, plot_lon, plot_lat, fields.potential,
+                          already_smoothed=lightning.lpi_model.supported(hrdps.model_config().key, run.cycle, fhour))
         base_dry_stride = max(contour_stride, shade_stride * 2)
         dry_stride = max(
             1,
@@ -986,6 +987,8 @@ def plot_regional_twopanel(
             "3-h rain dots: cyan 2.5/teal 10 mm | Transmission grey"
             + (f" | {fire_suffix}" if fire_suffix else "")
         )
+    if lightning.lpi_model.supported(hrdps.model_config().key, run.cycle, fhour):
+        right_footer = ('Init LPI diagnostic 20/40/60/80 | Dry *' if fhour == 0 else '3-h LPI probability 20/40/60/80% within30km | Dry * | Rain 2.5/10mm')
     add_panel_label(
         rh_ax,
         "" if edge_bands else "RH CATEGORIES + COLORED GUST VECTORS",
