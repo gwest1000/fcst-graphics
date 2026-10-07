@@ -2,7 +2,7 @@
 
 The implemented LPI is `bc_lpi_v4_random32`. It predicts the probability of at
 least one lightning occurrence within 30 km, expressed as 0-100 percent.
-Separate models predict the full day and each three-hour block. Activation covers all HRDPS cycles at F003 through F048. F000 uses the same learned responses as an initialization diagnostic, with its own label and temporal metadata. The active public product is continental HRDPS; the retired West rendering interface also applies the method when explicitly used. Day two, other cycles and West transfer the day-one continental coefficients and have not been independently confirmed.
+Separate models predict the full day and each three-hour block. Activation covers all HRDPS cycles at F003 through F048. F000 uses the same learned responses as an initialization diagnostic, distinguished by its temporal metadata. The active public product is continental HRDPS; the retired West rendering interface also applies the method when explicitly used. Day two, other cycles and West transfer the day-one continental coefficients and have not been independently confirmed.
 
 ## Repository and runtime
 
@@ -106,8 +106,8 @@ The HRDPS convective four-panel upper-right panel displays the same learned
 three-hour lightning probability as Fire Weather, replacing the standalone LI
 contours. IPW shading and CAPE hatching remain available. Transmission lines
 are shown on all four panels at 1.20 pt with a 2.20 pt white halo. LPI contours are
-20/40/60/80 percent within 30 km, with an initialization diagnostic label at
-F000. The probability field is already smoothed by the model and receives no
+20/40/60/80 percent within 30 km. The caption reads `LPI cntrd every 20%`
+at every horizon, including F000. The probability field is already smoothed by the model and receives no
 additional display smoothing. It retains the model's BC and buffer coverage.
 The renderer reuses a matching current-model Fire Weather cache when available;
 otherwise it calculates the same field on the same model subset. Standalone
