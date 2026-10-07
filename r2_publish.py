@@ -536,6 +536,25 @@ def asset_version(stamp: str, product_key: str, rows: Iterable[sqlite3.Row]) -> 
 
 def lpi_publication_metadata(product_key, stamp, hours):
     """Describe each run's actual LPI, rather than relabel historical frames."""
+    if product_key == 'continental_fourpanel':
+        import lpi_model
+        root=source_root(product_key)/stamp
+        learned=[]
+        for hour in hours:
+            png=root/f'hrdps_continental_fourpanel_{stamp}_f{hour:03d}.png'
+            marker=png.with_suffix('.lpi.json')
+            try:
+                evidence=json.loads(marker.read_text())
+                learned.append(evidence['formula_version']==lpi_model.VERSION and
+                    evidence['png_sha256']==hashlib.sha256(png.read_bytes()).hexdigest())
+            except (OSError,ValueError,KeyError):
+                learned.append(False)
+        if learned and all(learned):
+            return dict(lpiVersion=lpi_model.VERSION,lpiTargetRadiusKm=30,
+                description=PRODUCTS[product_key].description)
+        description='500 hPa vorticity/height/wind, IPW/LI/CAPE, layer humidity/temperature/wind, and precipitation/MSLP/surface wind.'
+        if any(learned):description='Mixed LI/LPI rollout; consult individual frame labels.'
+        return dict(lpiVersion='mixed_or_legacy',description=description)
     if product_key not in ('continental_lightning_twopanel', 'continental_lightning_verif'):
         return {}
     import numpy as np

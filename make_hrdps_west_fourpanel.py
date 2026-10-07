@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
+import os
 import concurrent.futures
 import re
 import sys
@@ -191,9 +194,10 @@ PRECIP_COLORS = [
     "#ff0000",  # 90-100
 ]
 PRECIP_OVER_COLOR = "#333333"
-LI_SMOOTHING_KM = 8.0
 CAPE_SMOOTHING_KM = 10.0
-LI_LINEWIDTHS = (2.15, 2.00, 1.85, 1.75)
+LPI_LEVELS = (20, 40, 60, 80)
+LPI_COLORS = ("#6e28a6", "#a52bb0", "#cf208f", "#e00063")
+LPI_LINEWIDTHS = (1.75, 1.85, 2.00, 2.15)
 HGT500_LINEWIDTH = 1.65
 HGT500_HALO_LINEWIDTH = 2.65
 HGT500_INTERVAL_KM = 0.06
@@ -260,11 +264,20 @@ def required_names(stamp: str, fhour: int) -> list[str]:
     return names
 
 
+def required_names_by_hour(stamp, hours):
+    from make_hrdps_west_lightning import required_names_by_hour as lightning_requirements
+    hours=tuple(int(hour) for hour in hours)
+    requirements=lightning_requirements(stamp,hours)
+    for hour in hours:
+        requirements.setdefault(hour,set()).update(required_names(stamp,hour))
+    return requirements
+
+
 def run_is_complete(run: RunInfo) -> bool:
-    for fhour in FORECAST_HOURS:
+    for fhour, needed in sorted(required_names_by_hour(run.stamp, FORECAST_HOURS).items()):
         html = fetch_text(f"{model_config().base_url}/{run.cycle}/{fhour:03d}/")
         links = set(parse_links(html))
-        missing = sorted(set(required_names(run.stamp, fhour)) - links)
+        missing = sorted(needed - links)
         if missing:
             log(f"Skipping {run.stamp}: missing {len(missing)} files at F{fhour:03d}.")
             return False
@@ -293,8 +306,8 @@ def latest_complete_run() -> RunInfo:
 def download_run(run: RunInfo, data_dir: Path, workers: int) -> None:
     jobs: list[tuple[str, Path]] = []
     run_dir = data_dir / run.stamp
-    for fhour in FORECAST_HOURS:
-        for name in required_names(run.stamp, fhour):
+    for fhour, names in sorted(required_names_by_hour(run.stamp, FORECAST_HOURS).items()):
+        for name in sorted(names):
             jobs.append((f"{model_config().base_url}/{run.cycle}/{fhour:03d}/{name}", run_dir / f"{fhour:03d}" / name))
 
     log(f"Downloading or reusing {len(jobs)} GRIB2 files into {run_dir}.")
@@ -705,12 +718,10 @@ def plot_fourpanel(
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=[-4, 0, 4, 8, 12, 16, 20, 24], label="$10^{-5}$ s$^{-1}$", fmt="%g")
     plot_style.add_fourpanel_text(ax, header, "50.0kPa AbsVort(s$^{-1}$,shaded), HgtThk(cntrd,km), 25.0kPa Wind(hlf brb=10km/h)", run)
 
-    # 2) Integrated precipitable water, lifted index, CAPE.
+    # 2) Integrated precipitable water, three-hour lightning probability, CAPE.
     ax = axes[1]
     ipw = compute_ipw(run_dir, run, fhour, psfc_pa, yslice, xslice)
-    li = crop(hour_file(run_dir, run, fhour, "MU-VT-LI", "ISBL", "500"), yslice, xslice)
     cape = crop(hour_file(run_dir, run, fhour, "CAPE", "ETAL", "10000"), yslice, xslice)
-    li = np.where(np.abs(li) > 50.0, np.nan, li)
     cape = np.where((cape >= 0.0) & (cape < 20000.0), cape, np.nan)
     cmap, norm, levels = make_ipw_cmap()
     cf = ax.contourf(
@@ -754,30 +765,21 @@ def plot_fourpanel(
             transform=DATA_CRS,
             zorder=20,
         )
-    clat, clon, cli = contour_grid(
-        plot_lat,
-        plot_lon,
-        li,
-        stride=contour_stride,
-        sigma=sigma_for_km(LI_SMOOTHING_KM),
-    )
-    li_levels = [-6, -4, -2, 0]
-    li_colors = ["#d000b8", "#d7191c", "#f28e2b", "black"]
-    li_ct = ax.contour(
-        clon,
-        clat,
-        cli,
-        levels=li_levels,
-        colors=li_colors,
-        linewidths=LI_LINEWIDTHS,
-        linestyles=["solid", "solid", "solid", "solid"],
-        transform=DATA_CRS,
-        zorder=22,
-    )
-    label_contours(li_ct, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%d", colors=li_colors)
+    from hrdps_lpi_display import probability_grid
+    lpi_lat, lpi_lon, lpi = probability_grid(run_dir, run, fhour, lat, lon)
+    # Features are already smoothed in the fitted model. Do not smooth again.
+    finite_lpi = lpi[np.isfinite(lpi)]
+    if finite_lpi.size and finite_lpi.max() >= LPI_LEVELS[0]:
+        lpi_ct = ax.contour(
+            lpi_lon, lpi_lat, lpi, levels=LPI_LEVELS, colors=LPI_COLORS,
+            linewidths=LPI_LINEWIDTHS, linestyles="solid",
+            transform=DATA_CRS, zorder=22,
+        )
+        label_contours(lpi_ct, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%d%%", colors=LPI_COLORS)
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=np.arange(10, 52, 2), label="mm", fmt="%g")
-    plot_style.add_fourpanel_text(ax, header, "IPW(shaded,mm), LI(cntrd 0/-2/-4/-6), CAPE(hatch 500/1000J/kg)", run)
+    lpi_period = "LPI init diagnostic" if fhour == 0 else "3-h LPI within30km"
+    plot_style.add_fourpanel_text(ax, header, f"IPW(mm), {lpi_period}(20/40/60/80%), CAPE(hatch500/1000)", run)
 
     # 3) 850-700 hPa RH, 850 hPa temperature, 850 hPa wind.
     ax = axes[2]
@@ -913,6 +915,12 @@ def plot_fourpanel(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, facecolor="white")
     plt.close(fig)
+    import lpi_model
+    marker=out_path.with_suffix('.lpi.json')
+    temp=marker.with_suffix(marker.suffix+f'.{os.getpid()}.tmp')
+    temp.write_text(json.dumps(dict(formula_version=lpi_model.VERSION,
+        png_sha256=hashlib.sha256(out_path.read_bytes()).hexdigest())))
+    temp.replace(marker)
 
 
 def make_plots(
