@@ -547,6 +547,20 @@ def aggregate_daily_lpi(paths_by_hour: dict[int, Path], window: DailyLpiWindow) 
 
     caches = [load_lpi_cache(paths_by_hour[fhour]) for fhour in window.included_hours]
     first = caches[0]
+    if first.formula_version == lightning.lpi_model.VERSION + '_3h':
+        # Daily probabilities are directly fitted; maxima of block probabilities
+        # have a different meaning and must never be substituted here.
+        daily_path = Path(str(paths_by_hour[window.end_fhour]).replace('_lpi.npz', '_lpi24h.npz'))
+        if not daily_path.exists():
+            log(f'Skipping learned daily verification: missing direct daily cache {daily_path}')
+            return None
+        direct = load_lpi_cache(daily_path)
+        if direct.formula_version != lightning.lpi_model.VERSION + '_24h' or direct.run.stamp != window.run.stamp:
+            raise RuntimeError('Incompatible direct daily LPI cache')
+        return DailyLpiForecast(formula_version=direct.formula_version, model_key=direct.model_key,
+            model_label=direct.model_label, source_label=direct.source_label, run=window.run,
+            start=window.start, end=window.end, end_fhour=window.end_fhour,
+            lat=direct.lat, lon=direct.lon, potential=direct.potential)
     stack = []
     for cache in caches:
         if cache.formula_version != first.formula_version:
@@ -728,10 +742,10 @@ def render_verification(
     hrdps.add_watersheds(ax, watersheds)
     hrdps.add_city_labels(ax, fontsize=7.1, marker_size=2.2, path_width=2.35, zorder=40)
 
-    plot_style.add_internal_colorbar(fig, ax, shaded, ticks=levels, label="BC-LPI", fmt="%g")
+    plot_style.add_internal_colorbar(fig, ax, shaded, ticks=levels, label="24-h lightning probability within 30km (%)" if forecast.formula_version.endswith("_24h") else "BC-LPI", fmt="%g")
     footer = (
-        "max LPI(shaded); observed 12Z-12Z lightning density contours: "
-        f"gold={OBS_LOW_FLASH_KM2:g}, orange={OBS_MED_FLASH_KM2:g}, red={OBS_HIGH_FLASH_KM2:g} flash km$^{{-2}}$; grey: BC transmission"
+        ("24-h lightning probability within30km (shaded); observed lightning density contours: " if forecast.formula_version.endswith("_24h") else "max LPI(shaded); observed 12Z-12Z lightning density contours: ")
+        + f"gold={OBS_LOW_FLASH_KM2:g}, orange={OBS_MED_FLASH_KM2:g}, red={OBS_HIGH_FLASH_KM2:g} flash km$^{{-2}}$; grey: BC transmission"
     )
     plot_style.add_single_panel_text(
         ax,

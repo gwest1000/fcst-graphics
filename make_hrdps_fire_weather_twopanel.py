@@ -507,8 +507,9 @@ def plot_lpi_contours(
     lon: np.ndarray,
     lat: np.ndarray,
     potential: np.ndarray,
+    already_smoothed: bool = False,
 ) -> None:
-    potential_s = lightning.smooth_nan(
+    potential_s = potential if already_smoothed else lightning.smooth_nan(
         potential,
         sigma=lightning.sigma_for_km(lightning.lpi_display_smoothing_km()),
     )
@@ -762,7 +763,8 @@ def plot_twopanel(
         else:
             add_cwfis_unavailable_label(lpi_ax)
         plot_precipitation_dots(lpi_ax, plot_lon, plot_lat, plot_fields.precip_3h)
-        plot_lpi_contours(lpi_ax, plot_lon, plot_lat, plot_fields.potential)
+        plot_lpi_contours(lpi_ax, plot_lon, plot_lat, plot_fields.potential,
+                          already_smoothed=lightning.lpi_model.supported(hrdps.model_config().key, run.cycle, fhour))
         dry_star_stride = max(contour_stride, shade_stride * 2)
         sampled_dry = plot_fields.dry_potential[::dry_star_stride, ::dry_star_stride]
         sampled_lpi = plot_fields.potential[::dry_star_stride, ::dry_star_stride]
@@ -835,6 +837,8 @@ def plot_twopanel(
             "3-h rain dots: cyan 2.5/teal 10 mm | Transmission grey"
             + (f" | {fire_suffix}" if fire_suffix else "")
         )
+    if lightning.lpi_model.supported(hrdps.model_config().key, run.cycle, fhour):
+        right_footer = 'Fire danger | 3-h LPI probability: 20/40/60/80% within30km | Dry * | Rain dots 2.5/10mm'
     add_panel_label(
         rh_ax,
         "",
