@@ -780,7 +780,7 @@ def plot_fourpanel(
         label_contours(lpi_ct, fontsize=TEMP850_LABEL_FONTSIZE, fmt="%d%%", colors=LPI_COLORS)
     add_watersheds(ax, watersheds)
     plot_style.add_fourpanel_colorbar(fig, ax, cf, ticks=np.arange(10, 52, 2), label="mm", fmt="%g")
-    lpi_caption = "LPI cntrd(20/40/60/80%)" + (" init diagnostic" if fhour == 0 else "")
+    lpi_caption = "LPI cntrd every 20%"
     plot_style.add_fourpanel_text(ax, header, f"IPW(mm), {lpi_caption}, CAPE(hatch500/1000)", run)
 
     # 3) 850-700 hPa RH, 850 hPa temperature, 850 hPa wind.
