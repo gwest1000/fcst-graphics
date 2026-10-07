@@ -376,8 +376,8 @@ def edge_panel_footers(
     fire_suffix = f" | {fire_label}" if fire_label else ""
     return (
         f"RH <30/20% brown / >60/80% blue | {period} gust",
-        "Fcst fire danger | LPI fcst cntrd | Dry Ltg * | "
-        f"Rain:blue dots 2.5/10 mm{fire_suffix}",
+        "Fcst fire danger | LPI cntrd(20/40/60/80%) | Dry Ltg * | "
+        f"Rain: dots 2.5/10 mm{fire_suffix}",
     )
 
 
@@ -833,12 +833,12 @@ def plot_twopanel(
         left_footer = f"Valid-time RH: brown <30%, blue >60% | {period} gust vectors | Grey: BC transmission"
         fire_suffix = fire_activity_footer(fire_observations)
         right_footer = (
-            f"Danger VL/L/M/H/E | {period} LPI 20/40/60/80 | {period} dry lightning * | "
+            f"Danger VL/L/M/H/E | LPI cntrd(20/40/60/80%) | {period} dry lightning * | "
             "3-h rain dots: cyan 2.5/teal 10 mm | Transmission grey"
             + (f" | {fire_suffix}" if fire_suffix else "")
         )
     if lightning.lpi_model.supported(hrdps.model_config().key, run.cycle, fhour):
-        right_footer = ('Fire danger | Init LPI diagnostic 20/40/60/80 | Dry * | Rain dots' if fhour == 0 else 'Fire danger | 3-h LPI probability: 20/40/60/80% within30km | Dry * | Rain dots 2.5/10mm')
+        right_footer = ('Fire danger | LPI cntrd(20/40/60/80%) init diagnostic | Dry * | Rain dots' if fhour == 0 else 'Fire danger | LPI cntrd(20/40/60/80%) | Dry * | Rain dots 2.5/10mm')
     add_panel_label(
         rh_ax,
         "",
@@ -983,12 +983,12 @@ def plot_regional_twopanel(
         left_footer = f"Valid-time RH: brown <30%, blue >60% | {period} gust vectors | Grey: BC transmission"
         fire_suffix = fire_activity_footer(fire_observations)
         right_footer = (
-            f"Danger VL/L/M/H/E | {period} LPI 20/40/60/80 | {period} dry lightning * | "
+            f"Danger VL/L/M/H/E | LPI cntrd(20/40/60/80%) | {period} dry lightning * | "
             "3-h rain dots: cyan 2.5/teal 10 mm | Transmission grey"
             + (f" | {fire_suffix}" if fire_suffix else "")
         )
     if lightning.lpi_model.supported(hrdps.model_config().key, run.cycle, fhour):
-        right_footer = ('Init LPI diagnostic 20/40/60/80 | Dry *' if fhour == 0 else '3-h LPI probability 20/40/60/80% within30km | Dry * | Rain 2.5/10mm')
+        right_footer = ('LPI cntrd(20/40/60/80%) init diagnostic | Dry *' if fhour == 0 else 'LPI cntrd(20/40/60/80%) | Dry * | Rain 2.5/10mm')
     add_panel_label(
         rh_ax,
         "" if edge_bands else "RH CATEGORIES + COLORED GUST VECTORS",
