@@ -16,8 +16,8 @@ class HrdpsFourPanelTest(unittest.TestCase):
     def tearDown(self) -> None:
         fourpanel.set_model("west")
 
-    def test_transmission_lines_are_limited_to_right_hand_panels(self) -> None:
-        self.assertEqual(fourpanel.TRANSMISSION_PANEL_INDICES, (1, 3))
+    def test_transmission_lines_are_shown_on_all_four_panels(self) -> None:
+        self.assertEqual(fourpanel.TRANSMISSION_PANEL_INDICES, (0, 1, 2, 3))
 
     def test_continental_domain_reaches_the_bc_yukon_border_and_preserves_aspect(self) -> None:
         fourpanel.set_model("continental")

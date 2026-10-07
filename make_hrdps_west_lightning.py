@@ -276,7 +276,7 @@ def load_transmission_lines(
     return lines
 
 
-def add_transmission_lines(ax: plt.Axes, lines: list[BaseGeometry]) -> None:
+def add_transmission_lines(ax: plt.Axes, lines: list[BaseGeometry], *, linewidth: float = TRANSMISSION_LINES_WIDTH, halo_width: float = TRANSMISSION_LINES_HALO_WIDTH) -> None:
     key = id(lines)
     projected = _PROJECTED_TRANSMISSION_LINES.get(key)
     if projected is None:
@@ -287,7 +287,7 @@ def add_transmission_lines(ax: plt.Axes, lines: list[BaseGeometry]) -> None:
         crs=PLOT_CRS,
         facecolor="none",
         edgecolor=TRANSMISSION_LINES_HALO_COLOR,
-        linewidth=TRANSMISSION_LINES_HALO_WIDTH,
+        linewidth=halo_width,
         alpha=TRANSMISSION_LINES_HALO_ALPHA,
         zorder=7.9,
     )
@@ -296,7 +296,7 @@ def add_transmission_lines(ax: plt.Axes, lines: list[BaseGeometry]) -> None:
         crs=PLOT_CRS,
         facecolor="none",
         edgecolor=TRANSMISSION_LINES_COLOR,
-        linewidth=TRANSMISSION_LINES_WIDTH,
+        linewidth=linewidth,
         alpha=TRANSMISSION_LINES_ALPHA,
         zorder=8,
     )

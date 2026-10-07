@@ -221,7 +221,9 @@ TERRAIN_COLORS = [
     "#3e211d",
     "#281411",
 ]
-TRANSMISSION_PANEL_INDICES = (1, 3)
+TRANSMISSION_PANEL_INDICES = (0, 1, 2, 3)
+TRANSMISSION_LINEWIDTH = 1.20
+TRANSMISSION_HALO_WIDTH = 2.20
 CONTINENTAL_FOURPANEL_EXTENT = (-139.6, -105.3, 45.5, 59.8)
 
 
@@ -604,7 +606,7 @@ def load_transmission_lines(extent: tuple[float, float, float, float]) -> list[B
 def add_transmission_lines(ax: plt.Axes, lines: list[BaseGeometry]) -> None:
     from make_hrdps_west_lightning import add_transmission_lines as add_lines
 
-    add_lines(ax, lines)
+    add_lines(ax, lines, linewidth=TRANSMISSION_LINEWIDTH, halo_width=TRANSMISSION_HALO_WIDTH)
 
 
 def plot_barbs(
