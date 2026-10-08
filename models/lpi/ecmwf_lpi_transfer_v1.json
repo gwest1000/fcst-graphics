@@ -1,0 +1,157 @@
+{
+  "version": "ecmwf_lpi_transfer_v1",
+  "teacher_version": "bc_lpi_v4_random32",
+  "teacher_sha256": "b244f81e1e631c98a88b865a1900035f9d035388b46edd33943ad64949d391a6",
+  "models": {
+    "3h": {
+      "kind": "logit",
+      "ridge": 0.01,
+      "beta": [
+        -0.026075660224583786,
+        0.7621143392339138
+      ],
+      "selection_candidates": [
+        {
+          "kind": "logit",
+          "ridge": 0.0001,
+          "mse": 0.0005868703117551257
+        },
+        {
+          "kind": "logit",
+          "ridge": 0.001,
+          "mse": 0.0005488002008957465
+        },
+        {
+          "kind": "logit",
+          "ridge": 0.01,
+          "mse": 0.000528413235128325
+        },
+        {
+          "kind": "feature_residual",
+          "ridge": 0.001,
+          "mse": 0.0005839647452077556
+        },
+        {
+          "kind": "feature_residual",
+          "ridge": 0.01,
+          "mse": 0.0005365873668445014
+        },
+        {
+          "kind": "feature_residual",
+          "ridge": 0.1,
+          "mse": 0.0005307370519436568
+        }
+      ]
+    },
+    "24h": {
+      "kind": "feature_residual",
+      "ridge": 0.1,
+      "beta": [
+        0.01837286554554215,
+        0.9050697304322033,
+        0.008696175155545846,
+        0.0027083579030668142,
+        0.015958179295127446,
+        0.023655939875933885,
+        0.014106809457664436,
+        0.01414419465467597,
+        0.005498297218567114,
+        0.002282874060513229,
+        0.011899954791739373,
+        0.021405431572231726,
+        0.0033034257645934515,
+        0.023067864210321178,
+        0.004562092166381694,
+        0.0015717945709569513,
+        -0.0014673883795652887,
+        0.00020096003267899894,
+        0.0010843849270007213,
+        0.015781662424260177,
+        0.013960064782434384,
+        0.004174266333808135
+      ],
+      "selection_candidates": [
+        {
+          "kind": "logit",
+          "ridge": 0.0001,
+          "mse": 0.0019267978704505674
+        },
+        {
+          "kind": "logit",
+          "ridge": 0.001,
+          "mse": 0.0014252535356906008
+        },
+        {
+          "kind": "logit",
+          "ridge": 0.01,
+          "mse": 0.001256388684519154
+        },
+        {
+          "kind": "feature_residual",
+          "ridge": 0.001,
+          "mse": 0.0017995776736675411
+        },
+        {
+          "kind": "feature_residual",
+          "ridge": 0.01,
+          "mse": 0.0013774432021216182
+        },
+        {
+          "kind": "feature_residual",
+          "ridge": 0.1,
+          "mse": 0.0012271678493068797
+        }
+      ]
+    }
+  },
+  "training_stamps_by_duration": {
+    "3h": [
+      "20261001T12Z",
+      "20261002T12Z",
+      "20261004T12Z",
+      "20261005T12Z",
+      "20261006T12Z",
+      "20261007T12Z"
+    ],
+    "24h": [
+      "20261001T12Z",
+      "20261002T12Z",
+      "20261004T12Z",
+      "20261005T12Z",
+      "20261006T12Z",
+      "20261007T12Z"
+    ]
+  },
+  "target": "Native ECMWF footprint mean of HRDPS probability; not independently verified ECMWF lightning probability",
+  "source_levels_hpa": [
+    1000,
+    925,
+    850,
+    700,
+    600,
+    500,
+    400,
+    300,
+    250
+  ],
+  "feature_smoothing_sigma_km": 20,
+  "experimental": true,
+  "transfer_accepted": false,
+  "recommended_mode": "unadjusted_hrdps_recipe",
+  "short_window_after144": "Unsupported three-hour probability after F144; use complete daily products",
+  "calibrated_leads_by_duration": {
+    "3h": [
+      3,
+      6,
+      9,
+      12,
+      15,
+      18,
+      21,
+      24
+    ],
+    "24h": [
+      24
+    ]
+  }
+}

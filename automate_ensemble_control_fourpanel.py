@@ -181,6 +181,18 @@ def main(argv: Iterable[str]) -> int:
                 else:
                     log(f"Using existing complete {config.label} four-panel plot set for {stamp}.")
 
+                if args.model == "ecmwf_control":
+                    # Preserve LPI training ingredients before rolling raw cleanup.
+                    # The experimental transfer fit has not qualified for public plots.
+                    try:
+                        import ecmwf_lpi
+                        lpi_archive = ecmwf_lpi.ensure_archive(args.data_root, stamp, hours)
+                        log(f"Retained ECMWF LPI ingredients: {lpi_archive}")
+                    except TimeoutError:
+                        raise
+                    except Exception as exc:
+                        log(f"ECMWF LPI ingredient archive failed for {stamp}: {exc}")
+
                 if args.legacy_pages_publish:
                     try:
                         with publish_lock():
