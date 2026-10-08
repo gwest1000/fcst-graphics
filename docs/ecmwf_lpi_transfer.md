@@ -70,6 +70,8 @@ leaving **six usable weather days**.
 Each native ECMWF cell is compared with its HRDPS footprint mean, requiring at
 least three archived points and 80% finite teacher coverage. BC land cells only;
 scores weight cell area and give each usable issued run equal total weight.
+The main missing-ingredient bottleneck is archived HRDPS CAPE: its finite BC grid-point coverage, averaged over the 24 forecast hours, ranges from 0.62% on October 3 to 36.85% on October 5. Missing values were not reinterpreted as zero; their source versus archive-processing origin needs a separate check.
+
 Coverage averages approximately 22.5% for daily products and 7.7% for three-hour
 products across all seven archived runs. Missing support is not no-lightning.
 
