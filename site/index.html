@@ -536,6 +536,19 @@
           </li>
           <li class="category">
             <div class="category-title">Surface</div>
+            <button class="menu-button ptype" type="button" data-plot-toggle="rain_snow">
+              <span class="chevron" aria-hidden="true"></span>
+              <span class="label">Rain &amp; Snow-depth Change</span>
+            </button>
+            <div class="submenu" data-plot-panel="rain_snow">
+              <button class="menu-button area" type="button" data-area-toggle="rain_snow_swbc">
+                <span class="chevron" aria-hidden="true"></span>
+                <span class="label">SW BC</span>
+              </button>
+              <div class="submenu" data-model-panel="rain_snow_swbc">
+                <button class="menu-button model" type="button" data-product-select="continental_rain_snow">HRDPS2.5</button>
+              </div>
+            </div>
             <button class="menu-button ptype" type="button" data-plot-toggle="temperature">
               <span class="chevron" aria-hidden="true"></span>
               <span class="label">2 m Temperature</span>
@@ -725,6 +738,7 @@
       }
 
       const plotGroups = {
+        rain_snow: ["continental_rain_snow"],
         fourpanel: ["continental_fourpanel", "ecmwf_control_convective_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
         ecmwf_ensemble_spread: ["ecmwf_ensemble_spread_500"],
@@ -735,6 +749,7 @@
         fire_danger_verif: ["fire_danger_verif"],
       };
       const areaGroups = {
+        rain_snow_swbc: ["continental_rain_snow"],
         fourpanel: ["continental_fourpanel", "ecmwf_control_convective_fourpanel"],
         synoptic_fourpanel: ["ecmwf_control_fourpanel", "gefs_control_fourpanel"],
         ecmwf_ensemble_spread: ["ecmwf_ensemble_spread_500"],
@@ -745,6 +760,7 @@
         fire_danger_verif: ["fire_danger_verif"],
       };
       const areaPlotGroups = {
+        rain_snow_swbc: "rain_snow",
         fourpanel: "fourpanel",
         synoptic_fourpanel: "synoptic_fourpanel",
         ecmwf_ensemble_spread: "ecmwf_ensemble_spread",
@@ -1201,6 +1217,7 @@
             "ecmwf_control_fourpanel",
             "gefs_control_fourpanel",
             "ecmwf_ensemble_spread_500",
+            "continental_rain_snow",
           ].find((key) => Boolean(productFor(activeRun, key)));
           if (fallbackProduct) {
             activeProductKey = fallbackProduct;
