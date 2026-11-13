@@ -418,6 +418,28 @@
         display: none;
       }
 
+      .hut-hotspot {
+        position: absolute;
+        z-index: 3;
+        padding: 0;
+        border: 0;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .hut-hotspot:focus-visible {
+        outline: 2px solid var(--hydro-blue);
+        outline-offset: -2px;
+      }
+
+      .controls .hut-return {
+        grid-column: 1 / 4;
+      }
+
+      .controls button[hidden], .hut-hotspot[hidden] {
+        display: none;
+      }
+
       @media (max-width: 900px) {
         .workspace {
           grid-template-columns: 1fr;
@@ -467,6 +489,10 @@
 
         .controls {
           grid-template-columns: 1fr;
+        }
+
+        .controls .hut-return {
+          grid-column: auto;
         }
 
         .menu-button {
@@ -640,6 +666,7 @@
       <main class="content">
         <section class="player" aria-label="Controllable forecast animation">
           <div class="controls">
+            <button id="hutReturnButton" class="hut-return" type="button" hidden>Back to forecast</button>
             <button id="prevButton" type="button" aria-label="Previous frame">Prev</button>
             <button id="playButton" class="primary" type="button" aria-label="Play animation">Play</button>
             <button id="nextButton" type="button" aria-label="Next frame">Next</button>
@@ -655,6 +682,7 @@
             </select>
           </div>
           <div class="stage">
+            <button id="hutHotspot" class="hut-hotspot" type="button" aria-label="Show hut names" title="Hut names" hidden></button>
             <img
               id="animationImage"
               crossorigin="anonymous"
@@ -781,6 +809,9 @@
       const prevButton = document.querySelector("#prevButton");
       const nextButton = document.querySelector("#nextButton");
       const speedSelect = document.querySelector("#speedSelect");
+      const hutHotspot = document.querySelector("#hutHotspot");
+      const hutReturnButton = document.querySelector("#hutReturnButton");
+      let hutView = false;
 
       let runs = fallbackRuns;
       let activeRunIndex = 0;
@@ -866,6 +897,53 @@
         const base = product.imageBase || `./images/${activeRun.stamp}/`;
         const assetVersion = product.assetVersion || activeRun.assetVersion || activeRun.stamp;
         return `${base}${filename}?v=${encodeURIComponent(`${manifestVersion}-${assetVersion}`)}`;
+      }
+
+      function hutViewUrl() {
+        if (activeProductKey !== "continental_rain_snow") {
+          return "";
+        }
+        const product = productFor(activeRun, "continental_rain_snow_huts");
+        return product?.hours?.includes(0)
+          ? assetUrl(product, `${product.filePrefix}_f000.png`) : "";
+      }
+
+      function hutHotspotBounds(width, height, imageWidth, imageHeight) {
+        const scale = Math.min(width / imageWidth, height / imageHeight);
+        return {
+          left: (width - imageWidth * scale) / 2 + imageWidth * scale * .008,
+          top: (height - imageHeight * scale) / 2 + imageHeight * scale * .006,
+          width: imageWidth * scale * .26,
+          height: imageHeight * scale * .045,
+        };
+      }
+
+      function updateHutControls() {
+        hutReturnButton.hidden = !hutView;
+        for (const button of [prevButton, playButton, nextButton]) {
+          button.hidden = hutView;
+        }
+        const stage = animationImage.parentElement;
+        const ready = animationImage.complete && animationImage.naturalWidth > 0;
+        hutHotspot.hidden = hutView || frames[currentIndex]?.hour !== 0 || !hutViewUrl() || !ready;
+        if (!hutHotspot.hidden) {
+          const bounds = hutHotspotBounds(stage.clientWidth, stage.clientHeight,
+            animationImage.naturalWidth, animationImage.naturalHeight);
+          for (const [key, value] of Object.entries(bounds)) {
+            hutHotspot.style[key] = `${value}px`;
+          }
+        }
+      }
+
+      function setHutView(enabled) {
+        stopAnimation();
+        hutView = Boolean(enabled && hutViewUrl());
+        setFrame(0);
+        if (hutView) {
+          hutReturnButton.focus({preventScroll: true});
+        } else {
+          frameSlider.focus({preventScroll: true});
+        }
       }
 
       function clearCompositeFrameCache() {
@@ -1185,6 +1263,7 @@
       }
 
       function renderActiveView() {
+        hutView = false;
         const product = currentProduct();
         if (!product) {
           return;
@@ -1251,8 +1330,14 @@
         const frame = frames[currentIndex];
         const product = currentProduct();
         currentBaseFrameUrl = frame.href;
+        if (hutView && frame.hour === 0 && hutViewUrl()) {
+          currentBaseFrameUrl = hutViewUrl();
+        } else {
+          hutView = false;
+        }
         showCurrentFrameImage();
-        animationImage.alt = `${product.label} F${frame.fhour}`;
+        animationImage.alt = hutView ? "Initial snow map with hut names on the left panel" : `${product.label} F${frame.fhour}`;
+        updateHutControls();
         frameSlider.value = String(currentIndex);
         sliderTickLabels.forEach((tick) => {
           tick.classList.toggle("active", Number(tick.dataset.frameIndex) === currentIndex);
@@ -1263,6 +1348,7 @@
         if (!frames.length) {
           return;
         }
+        hutView = false;
         setFrame(Math.max(0, Math.min(index, frames.length - 1)));
       }
 
@@ -1273,6 +1359,10 @@
       function startAnimation() {
         if (timer) {
           return;
+        }
+        if (hutView) {
+          hutView = false;
+          setFrame(currentIndex);
         }
         playButton.textContent = "Pause";
         playButton.setAttribute("aria-label", "Pause animation");
@@ -1364,6 +1454,15 @@
         setFrame(Number(event.target.value));
       });
 
+      hutHotspot.addEventListener("click", () => setHutView(true));
+      hutReturnButton.addEventListener("click", () => setHutView(false));
+      new ResizeObserver(updateHutControls).observe(animationImage.parentElement);
+      animationImage.addEventListener("error", () => {
+        if (hutView) {
+          setHutView(false);
+        }
+      });
+
       speedSelect.addEventListener("change", restartAnimationIfPlaying);
 
       fireActivityOverlay.addEventListener("load", () => {
@@ -1379,6 +1478,7 @@
       });
 
       animationImage.addEventListener("load", () => {
+        updateHutControls();
         const cached = currentCompositeKey
           ? compositeFrameUrls.get(currentCompositeKey)
           : "";
@@ -1397,6 +1497,11 @@
       });
 
       window.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && hutView) {
+          event.preventDefault();
+          setHutView(false);
+          return;
+        }
         if (event.target instanceof Element && event.target.matches("input, select, button, a")) {
           return;
         }
