@@ -666,7 +666,6 @@
       <main class="content">
         <section class="player" aria-label="Controllable forecast animation">
           <div class="controls">
-            <button id="hutReturnButton" class="hut-return" type="button" hidden>Back to forecast</button>
             <button id="prevButton" type="button" aria-label="Previous frame">Prev</button>
             <button id="playButton" class="primary" type="button" aria-label="Play animation">Play</button>
             <button id="nextButton" type="button" aria-label="Next frame">Next</button>
@@ -810,7 +809,6 @@
       const nextButton = document.querySelector("#nextButton");
       const speedSelect = document.querySelector("#speedSelect");
       const hutHotspot = document.querySelector("#hutHotspot");
-      const hutReturnButton = document.querySelector("#hutReturnButton");
       let hutView = false;
 
       let runs = fallbackRuns;
@@ -919,13 +917,14 @@
       }
 
       function updateHutControls() {
-        hutReturnButton.hidden = !hutView;
         for (const button of [prevButton, playButton, nextButton]) {
           button.hidden = hutView;
         }
         const stage = animationImage.parentElement;
         const ready = animationImage.complete && animationImage.naturalWidth > 0;
-        hutHotspot.hidden = hutView || frames[currentIndex]?.hour !== 0 || !hutViewUrl() || !ready;
+        hutHotspot.hidden = frames[currentIndex]?.hour !== 0 || !hutViewUrl() || !ready;
+        hutHotspot.setAttribute("aria-label", hutView ? "Return to original frame" : "Show hut names");
+        hutHotspot.title = hutView ? "Original frame" : "Hut names";
         if (!hutHotspot.hidden) {
           const bounds = hutHotspotBounds(stage.clientWidth, stage.clientHeight,
             animationImage.naturalWidth, animationImage.naturalHeight);
@@ -940,7 +939,7 @@
         hutView = Boolean(enabled && hutViewUrl());
         setFrame(0);
         if (hutView) {
-          hutReturnButton.focus({preventScroll: true});
+          hutHotspot.focus({preventScroll: true});
         } else {
           frameSlider.focus({preventScroll: true});
         }
@@ -1454,8 +1453,7 @@
         setFrame(Number(event.target.value));
       });
 
-      hutHotspot.addEventListener("click", () => setHutView(true));
-      hutReturnButton.addEventListener("click", () => setHutView(false));
+      hutHotspot.addEventListener("click", () => setHutView(!hutView));
       new ResizeObserver(updateHutControls).observe(animationImage.parentElement);
       animationImage.addEventListener("error", () => {
         if (hutView) {
