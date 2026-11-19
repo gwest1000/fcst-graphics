@@ -349,6 +349,20 @@
         accent-color: var(--hydro-green);
       }
 
+      #loopProgress {
+        height: 3px;
+        width: calc(100% - 14px);
+        margin: -2px 7px 0;
+        appearance: none;
+        border: 0;
+        border-radius: 2px;
+        background: #e5e8e9;
+        color: #94a2a5;
+      }
+      #loopProgress::-webkit-progress-bar { background: #e5e8e9; }
+      #loopProgress::-webkit-progress-value { background: #94a2a5; }
+      #loopProgress::-moz-progress-bar { background: #94a2a5; }
+
       .slider-ticks {
         position: relative;
         height: 17px;
@@ -671,6 +685,7 @@
             <button id="nextButton" type="button" aria-label="Next frame">Next</button>
             <div class="range-wrap">
               <input id="frameSlider" type="range" min="0" max="16" value="0" step="1" aria-label="Forecast hour" />
+              <progress id="loopProgress" value="0" max="1" aria-label="Forecast loop images loaded"></progress>
               <div class="slider-ticks" id="sliderTicks" aria-hidden="true"></div>
             </div>
             <select id="speedSelect" aria-label="Animation speed">
@@ -835,6 +850,21 @@
       const compositeCanvas = document.createElement("canvas");
       const compositeContext = compositeCanvas.getContext("2d");
       const COMPOSITE_FRAME_CACHE_LIMIT = 24;
+      const FULL_DECODE_FRAME_LIMIT = 24;
+      const PRELOAD_CONCURRENCY = 3;
+      const DECODED_FRAME_BUDGET = 128 * 1024 * 1024;
+      const DEFAULT_FRAME_BYTES = 1440 * 900 * 4;
+      const pendingFrameImages = new Map();
+      const decodedFrameImages = new Map();
+      const loopImages = new Map(); // Original URL -> local URL for the downloaded bytes.
+      const loadedFrameUrls = new Set();
+      const loopProgress = document.querySelector("#loopProgress");
+      let loopController = new AbortController();
+      const failedFrameUrls = new Set();
+      const failedFrameDecodes = new Set();
+      const frameDecodedBytes = new Map();
+      let decodeTargets = new Set();
+
 
       function padHour(hour) {
         return String(hour).padStart(3, "0");
@@ -893,8 +923,10 @@
 
       function assetUrl(product, filename) {
         const base = product.imageBase || `./images/${activeRun.stamp}/`;
-        const assetVersion = product.assetVersion || activeRun.assetVersion || activeRun.stamp;
-        return `${base}${filename}?v=${encodeURIComponent(`${manifestVersion}-${assetVersion}`)}`;
+        const assetVersion = product.assetVersion || activeRun.assetVersion || manifestVersion;
+        const url = new URL(`${base}${filename}`, window.location.href);
+        url.searchParams.set("v", assetVersion);
+        return url.href;
       }
 
       function hutViewUrl() {
@@ -999,6 +1031,7 @@
           return;
         }
         currentCompositeKey = compositeKeyFor(currentBaseFrameUrl);
+        if (!hutView && !loadedFrameUrls.has(currentBaseFrameUrl) && !failedFrameUrls.has(currentBaseFrameUrl)) return;
         const cached = currentCompositeKey
           ? compositeFrameUrls.get(currentCompositeKey)
           : "";
@@ -1009,8 +1042,8 @@
           }
           return;
         }
-        if (animationImage.src !== currentBaseFrameUrl) {
-          animationImage.src = currentBaseFrameUrl;
+        if (animationImage.src !== displayUrl()) {
+          animationImage.src = displayUrl();
         }
         fireActivityOverlay.hidden = !fireOverlayReady();
         composeCurrentFrame();
@@ -1025,7 +1058,7 @@
           compositeUnavailable ||
           !compositeContext ||
           !fireOverlayReady() ||
-          animationImage.src !== currentBaseFrameUrl ||
+          (animationImage.src !== displayUrl() && animationImage.src !== currentBaseFrameUrl) ||
           !animationImage.complete ||
           animationImage.naturalWidth < 1
         ) {
@@ -1233,12 +1266,153 @@
         });
       }
 
-      function preloadFrames() {
-        frames.forEach((frame) => {
-          const img = new Image();
-          img.crossOrigin = "anonymous";
-          img.src = frame.href;
-        });
+      function resetFramePreloads() {
+        loopController.abort();
+        loopController = new AbortController();
+        const pending = [...pendingFrameImages.values()];
+        pendingFrameImages.clear();
+        pending.forEach((image) => image.removeAttribute("src"));
+        decodedFrameImages.clear();
+        for (const url of loopImages.values()) URL.revokeObjectURL(url);
+        loopImages.clear();
+        loadedFrameUrls.clear();
+        failedFrameUrls.clear();
+        failedFrameDecodes.clear();
+        frameDecodedBytes.clear();
+        decodeTargets.clear();
+
+      }
+
+      function updateLoopProgress() {
+        loopProgress.max = Math.max(frames.length, 1);
+        loopProgress.value = loadedFrameUrls.size;
+        const failures = failedFrameUrls.size;
+        loopProgress.title = `${loadedFrameUrls.size} of ${frames.length} frames loaded` +
+          (failures ? ` · ${failures} unavailable` : "");
+        loopProgress.setAttribute("aria-valuetext", loopProgress.title);
+      }
+
+      function displayUrl() {
+        return loopImages.get(currentBaseFrameUrl) || currentBaseFrameUrl;
+      }
+
+      async function preloadFrame(href) {
+        const image = new Image();
+        image.crossOrigin = "anonymous";
+        image.fetchPriority = "low";
+        pendingFrameImages.set(href, image);
+        const isCurrent = () => pendingFrameImages.get(href) === image;
+        const finish = () => {
+          if (isCurrent()) {
+            pendingFrameImages.delete(href);
+            updateLoopProgress();
+            warmFrames();
+          }
+        };
+        image.onload = async () => {
+          if (!isCurrent()) {
+            return;
+          }
+
+          loadedFrameUrls.add(href);
+          if (href === currentBaseFrameUrl) showCurrentFrameImage();
+          frameDecodedBytes.set(href, image.naturalWidth * image.naturalHeight * 4);
+          updateDecodeTargets();
+          if (decodeTargets.has(href)) {
+            try {
+              await image.decode();
+              if (isCurrent() && decodeTargets.has(href)) {
+                decodedFrameImages.set(href, image);
+              }
+            } catch {
+              if (isCurrent()) {
+                failedFrameDecodes.add(href);
+              }
+            }
+          }
+          finish();
+        };
+        image.onerror = () => {
+          if (isCurrent()) {
+            failedFrameUrls.add(href);
+            URL.revokeObjectURL(loopImages.get(href));
+            loopImages.delete(href);
+            loadedFrameUrls.delete(href);
+            if (href === currentBaseFrameUrl) showCurrentFrameImage();
+          }
+          finish();
+        };
+        try {
+          // Keep the compressed bytes for the entire selected loop. Decoded pixels
+          // cost much more memory, so only keep nearby frames explicitly decoded.
+          if (!loopImages.has(href)) {
+            const response = await fetch(href, { signal: loopController.signal });
+            if (!response.ok) throw new Error(String(response.status));
+            const blob = await response.blob();
+            if (!isCurrent()) return;
+            loopImages.set(href, URL.createObjectURL(blob));
+          }
+          image.src = loopImages.get(href);
+        } catch {
+          if (isCurrent()) {
+            failedFrameUrls.add(href);
+            if (href === currentBaseFrameUrl) showCurrentFrameImage();
+            finish();
+          }
+        }
+      }
+
+      function frameWarmOrder() {
+        const count = frames.length;
+        const order = new Set();
+        const addOffset = (offset) => order.add(frames[(currentIndex + offset + count) % count].href);
+        addOffset(0);
+        for (let distance = 1; distance <= Math.min(6, count - 1); distance++) {
+          addOffset(distance);
+          addOffset(-distance);
+        }
+        for (let offset = 7; offset < count - 6; offset++) {
+          addOffset(offset);
+        }
+        return [...order];
+      }
+
+      function updateDecodeTargets(order = frameWarmOrder()) {
+        const saveData = navigator.connection?.saveData;
+        const count = saveData ? 3 : frames.length <= FULL_DECODE_FRAME_LIMIT ? frames.length : 13;
+        decodeTargets = new Set();
+        let budget = DECODED_FRAME_BUDGET;
+        for (const href of order.slice(0, count)) {
+          const bytes = frameDecodedBytes.get(href) || DEFAULT_FRAME_BYTES;
+          if (bytes <= budget) {
+            decodeTargets.add(href);
+            budget -= bytes;
+          }
+        }
+        for (const href of decodedFrameImages.keys()) {
+          if (!decodeTargets.has(href)) {
+            decodedFrameImages.delete(href);
+          }
+        }
+      }
+
+      function warmFrames() {
+        if (!frames.length) return;
+        const order = frameWarmOrder();
+        updateDecodeTargets(order);
+        const limit = navigator.connection?.saveData ? 3 : order.length;
+        for (const href of order.slice(0, limit)) {
+          if (pendingFrameImages.size >= PRELOAD_CONCURRENCY) {
+            break;
+          }
+          if (pendingFrameImages.has(href) || failedFrameUrls.has(href)) {
+            continue;
+          }
+          const needsDecode = decodeTargets.has(href) && !decodedFrameImages.has(href) && !failedFrameDecodes.has(href);
+          if (!loopImages.has(href) || needsDecode) {
+            preloadFrame(href);
+          }
+        }
       }
 
       function setProduct(productKey, openArea = true) {
@@ -1268,11 +1442,15 @@
           return;
         }
         runStatus.textContent = runLabel(activeRun);
-        frames = makeFrames(activeRun, product);
+        const nextFrames = makeFrames(activeRun, product);
+        if (nextFrames.length !== frames.length || nextFrames.some((frame, i) => frame.href !== frames[i].href)) {
+          resetFramePreloads();
+        }
+        frames = nextFrames;
+        updateLoopProgress();
         document.querySelector(".player").classList.toggle("static-view", frames.length <= 1);
         frameSlider.max = String(Math.max(frames.length - 1, 0));
         renderSliderTicks();
-        preloadFrames();
         setFrame(0);
         renderFireActivityOverlay();
       }
@@ -1329,12 +1507,14 @@
         const frame = frames[currentIndex];
         const product = currentProduct();
         currentBaseFrameUrl = frame.href;
+        failedFrameUrls.delete(frame.href);
         if (hutView && frame.hour === 0 && hutViewUrl()) {
           currentBaseFrameUrl = hutViewUrl();
         } else {
           hutView = false;
         }
         showCurrentFrameImage();
+        warmFrames();
         animationImage.alt = hutView ? "Initial snow map with hut names on the left panel" : `${product.label} F${frame.fhour}`;
         updateHutControls();
         frameSlider.value = String(currentIndex);
@@ -1363,6 +1543,7 @@
           hutView = false;
           setFrame(currentIndex);
         }
+        warmFrames();
         playButton.textContent = "Pause";
         playButton.setAttribute("aria-label", "Pause animation");
         timer = window.setInterval(advanceFrame, Number(speedSelect.value));
@@ -1438,6 +1619,14 @@
         }
       });
 
+      hutHotspot.addEventListener("click", () => setHutView(!hutView));
+      new ResizeObserver(updateHutControls).observe(animationImage.parentElement);
+      animationImage.addEventListener("error", () => {
+        if (hutView) {
+          setHutView(false);
+        }
+      });
+
       prevButton.addEventListener("click", () => {
         stopAnimation();
         setManualFrame(currentIndex - 1);
@@ -1450,15 +1639,7 @@
 
       frameSlider.addEventListener("input", (event) => {
         stopAnimation();
-        setFrame(Number(event.target.value));
-      });
-
-      hutHotspot.addEventListener("click", () => setHutView(!hutView));
-      new ResizeObserver(updateHutControls).observe(animationImage.parentElement);
-      animationImage.addEventListener("error", () => {
-        if (hutView) {
-          setHutView(false);
-        }
+        setManualFrame(Number(event.target.value));
       });
 
       speedSelect.addEventListener("change", restartAnimationIfPlaying);
@@ -1470,8 +1651,8 @@
       });
       fireActivityOverlay.addEventListener("error", () => {
         fireActivityOverlay.hidden = true;
-        if (animationImage.src !== currentBaseFrameUrl) {
-          animationImage.src = currentBaseFrameUrl;
+        if (animationImage.src !== displayUrl()) {
+          animationImage.src = displayUrl();
         }
       });
 
@@ -1484,7 +1665,8 @@
           fireActivityOverlay.hidden = true;
           return;
         }
-        if (animationImage.src === currentBaseFrameUrl) {
+        if (animationImage.src === displayUrl()) {
+          frameDecodedBytes.set(currentBaseFrameUrl, animationImage.naturalWidth * animationImage.naturalHeight * 4);
           fireActivityOverlay.hidden = !fireOverlayReady();
           composeCurrentFrame();
         }
@@ -1500,16 +1682,18 @@
           setHutView(false);
           return;
         }
-        if (event.target instanceof Element && event.target.matches("input, select, button, a")) {
+        if (event.target instanceof Element && event.target.matches("input, select")) {
           return;
         }
         if (event.key === "ArrowLeft") {
+          event.preventDefault();
           stopAnimation();
           setManualFrame(currentIndex - 1);
         } else if (event.key === "ArrowRight") {
+          event.preventDefault();
           stopAnimation();
           setManualFrame(currentIndex + 1);
-        } else if (event.key === " ") {
+        } else if (event.key === " " && !event.target.closest?.("button, a")) {
           event.preventDefault();
           if (timer) {
             stopAnimation();
